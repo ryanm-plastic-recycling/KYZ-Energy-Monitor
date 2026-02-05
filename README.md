@@ -92,10 +92,10 @@ Optional fields:
 
 ## SQL Scripts
 
-The application does not execute DDL. Use scripts in `/sql` manually during deployment/change management.
+This application does not execute DDL. Apply these scripts manually via Azure Data Studio / VS Code:
 
-- `sql/001_create_table.sql`
-- `sql/002_indexes.sql` (optional)
+- `sql/001_create_table.sql` (dbo.KYZ_Interval with Interval_kWh/Interval_kW, defaults, PK)
+- `sql/002_indexes.sql` (IX_KYZ_Interval_InsertedAtUtc)
 
 ## Manual SQL script (same as `sql/001_create_table.sql`)
 
