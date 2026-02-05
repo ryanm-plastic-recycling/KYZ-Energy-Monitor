@@ -1,0 +1,348 @@
+import argparse
+import json
+import logging
+from logging.handlers import TimedRotatingFileHandler
+import os
+import signal
+import sys
+import threading
+import time
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+import paho.mqtt.client as mqtt
+import pyodbc
+from dotenv import load_dotenv
+
+
+TOPIC = "pri/energy/kyz/interval"
+
+
+class ConfigError(Exception):
+    """Raised when required configuration is missing."""
+
+
+def configure_logging() -> logging.Logger:
+    logs_dir = Path("logs")
+    logs_dir.mkdir(parents=True, exist_ok=True)
+
+    logger = logging.getLogger("kyz_ingestor")
+    logger.setLevel(logging.INFO)
+
+    formatter = logging.Formatter(
+        "%(asctime)s %(levelname)s [%(threadName)s] %(name)s - %(message)s"
+    )
+
+    file_handler = TimedRotatingFileHandler(
+        logs_dir / "kyz_ingestor.log",
+        when="midnight",
+        interval=1,
+        backupCount=30,
+        encoding="utf-8",
+    )
+    file_handler.setFormatter(formatter)
+
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setFormatter(formatter)
+
+    logger.handlers.clear()
+    logger.addHandler(file_handler)
+    logger.addHandler(console_handler)
+
+    return logger
+
+
+def get_required_env(name: str) -> str:
+    value = os.getenv(name)
+    if not value:
+        raise ConfigError(f"Missing required environment variable: {name}")
+    return value
+
+
+def get_sql_connection_string() -> str:
+    return (
+        "DRIVER={ODBC Driver 18 for SQL Server};"
+        f"SERVER={get_required_env('SQL_SERVER')};"
+        f"DATABASE={get_required_env('SQL_DATABASE')};"
+        f"UID={get_required_env('SQL_USERNAME')};"
+        f"PWD={get_required_env('SQL_PASSWORD')};"
+        "Encrypt=yes;"
+        "TrustServerCertificate=no;"
+        "Connection Timeout=15;"
+    )
+
+
+def parse_interval_end(value: Any) -> datetime:
+    if not isinstance(value, str):
+        raise ValueError("intervalEnd must be a string in format YYYY-MM-DD HH:MM:SS")
+    return datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+
+
+def validate_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    required_fields = ["intervalEnd", "pulseCount", "kWh", "kW"]
+    for field in required_fields:
+        if field not in payload:
+            raise ValueError(f"Missing required payload field: {field}")
+
+    interval_end = parse_interval_end(payload["intervalEnd"])
+
+    if not isinstance(payload["pulseCount"], int):
+        raise ValueError("pulseCount must be an integer")
+
+    for numeric_field in ["kWh", "kW"]:
+        if not isinstance(payload[numeric_field], (int, float)):
+            raise ValueError(f"{numeric_field} must be numeric")
+
+    total_kwh = payload.get("total_kWh")
+    if total_kwh is not None and not isinstance(total_kwh, (int, float)):
+        raise ValueError("total_kWh must be numeric when provided")
+
+    r17_exclude = payload.get("r17Exclude")
+    if r17_exclude is not None and not isinstance(r17_exclude, bool):
+        raise ValueError("r17Exclude must be boolean when provided")
+
+    kyz_invalid_alarm = payload.get("kyzInvalidAlarm")
+    if kyz_invalid_alarm is not None and not isinstance(kyz_invalid_alarm, bool):
+        raise ValueError("kyzInvalidAlarm must be boolean when provided")
+
+    return {
+        "intervalEnd": interval_end,
+        "pulseCount": payload["pulseCount"],
+        "kWh": float(payload["kWh"]),
+        "kW": float(payload["kW"]),
+        "total_kWh": float(total_kwh) if total_kwh is not None else None,
+        "r17Exclude": r17_exclude,
+        "kyzInvalidAlarm": kyz_invalid_alarm,
+    }
+
+
+class IntervalIngestor:
+    def __init__(self, logger: logging.Logger):
+        self.logger = logger
+        self.conn_str = get_sql_connection_string()
+        self.conn = pyodbc.connect(self.conn_str, autocommit=False)
+        self.lock = threading.Lock()
+
+    def close(self) -> None:
+        self.conn.close()
+
+    def insert_interval(self, data: dict[str, Any]) -> None:
+        sql = """
+            INSERT INTO dbo.KYZ_Interval (
+                IntervalEnd,
+                PulseCount,
+                kWh,
+                kW,
+                Total_kWh,
+                R17Exclude,
+                KyzInvalidAlarm
+            )
+            SELECT ?, ?, ?, ?, ?, ?, ?
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM dbo.KYZ_Interval WITH (UPDLOCK, HOLDLOCK)
+                WHERE IntervalEnd = ?
+            )
+        """
+
+        params = (
+            data["intervalEnd"],
+            data["pulseCount"],
+            data["kWh"],
+            data["kW"],
+            data["total_kWh"],
+            data["r17Exclude"],
+            data["kyzInvalidAlarm"],
+            data["intervalEnd"],
+        )
+
+        with self.lock:
+            cursor = self.conn.cursor()
+            try:
+                cursor.execute(sql, params)
+                inserted = cursor.rowcount
+                self.conn.commit()
+            except Exception:
+                self.conn.rollback()
+                raise
+            finally:
+                cursor.close()
+
+        if inserted == 0:
+            self.logger.info("Skipped duplicate intervalEnd=%s", data["intervalEnd"])
+        else:
+            self.logger.info("Inserted intervalEnd=%s", data["intervalEnd"])
+
+
+class MqttSqlService:
+    def __init__(self, logger: logging.Logger, ingestor: IntervalIngestor):
+        self.logger = logger
+        self.ingestor = ingestor
+        self.stop_event = threading.Event()
+
+        self.mqtt_host = get_required_env("MQTT_HOST")
+        self.mqtt_port = int(os.getenv("MQTT_PORT", "1883"))
+        self.mqtt_username = os.getenv("MQTT_USERNAME")
+        self.mqtt_password = os.getenv("MQTT_PASSWORD")
+        self.mqtt_client_id = os.getenv("MQTT_CLIENT_ID", "kyz-sql-ingestor")
+        self.mqtt_keepalive = int(os.getenv("MQTT_KEEPALIVE", "60"))
+
+        self.client = mqtt.Client(
+            mqtt.CallbackAPIVersion.VERSION2,
+            client_id=self.mqtt_client_id,
+            clean_session=True,
+        )
+
+        if self.mqtt_username:
+            self.client.username_pw_set(self.mqtt_username, self.mqtt_password)
+
+        self.client.on_connect = self.on_connect
+        self.client.on_disconnect = self.on_disconnect
+        self.client.on_message = self.on_message
+
+    def on_connect(self, client: mqtt.Client, userdata: Any, flags: Any, reason_code: Any, properties: Any = None) -> None:
+        if reason_code == 0:
+            self.logger.info("Connected to MQTT broker at %s:%s", self.mqtt_host, self.mqtt_port)
+            client.subscribe(TOPIC, qos=1)
+            self.logger.info("Subscribed to topic %s", TOPIC)
+        else:
+            self.logger.error("Failed MQTT connect with reason code: %s", reason_code)
+
+    def on_disconnect(self, client: mqtt.Client, userdata: Any, disconnect_flags: Any, reason_code: Any, properties: Any = None) -> None:
+        self.logger.warning("MQTT disconnected (reason=%s)", reason_code)
+
+    def on_message(self, client: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage) -> None:
+        try:
+            payload = json.loads(msg.payload.decode("utf-8"))
+            data = validate_payload(payload)
+            self.ingestor.insert_interval(data)
+        except json.JSONDecodeError:
+            self.logger.exception("Invalid JSON payload on topic %s", msg.topic)
+        except Exception:
+            self.logger.exception("Failed to process MQTT payload on topic %s", msg.topic)
+
+    def run(self) -> None:
+        self.logger.info("Starting MQTT SQL service")
+        self.client.connect(self.mqtt_host, self.mqtt_port, self.mqtt_keepalive)
+        self.client.loop_start()
+
+        while not self.stop_event.is_set():
+            time.sleep(0.2)
+
+        self.client.loop_stop()
+        self.client.disconnect()
+        self.ingestor.close()
+        self.logger.info("Service stopped")
+
+    def stop(self) -> None:
+        self.stop_event.set()
+
+
+class MqttConnectivityProbe:
+    def __init__(self, logger: logging.Logger):
+        self.logger = logger
+        self.connected = threading.Event()
+        self.failed = threading.Event()
+
+        self.mqtt_host = get_required_env("MQTT_HOST")
+        self.mqtt_port = int(os.getenv("MQTT_PORT", "1883"))
+        self.mqtt_username = os.getenv("MQTT_USERNAME")
+        self.mqtt_password = os.getenv("MQTT_PASSWORD")
+
+        self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="kyz-sql-ingestor-test")
+        if self.mqtt_username:
+            self.client.username_pw_set(self.mqtt_username, self.mqtt_password)
+        self.client.on_connect = self.on_connect
+
+    def on_connect(self, client: mqtt.Client, userdata: Any, flags: Any, reason_code: Any, properties: Any = None) -> None:
+        if reason_code == 0:
+            self.logger.info("MQTT connectivity OK")
+            self.connected.set()
+        else:
+            self.logger.error("MQTT connectivity failed, reason code: %s", reason_code)
+            self.failed.set()
+
+    def run(self, timeout_seconds: int = 10) -> bool:
+        try:
+            self.client.connect(self.mqtt_host, self.mqtt_port, 30)
+            self.client.loop_start()
+            deadline = time.time() + timeout_seconds
+            while time.time() < deadline:
+                if self.connected.is_set():
+                    return True
+                if self.failed.is_set():
+                    return False
+                time.sleep(0.2)
+            self.logger.error("MQTT connectivity timed out")
+            return False
+        except Exception:
+            self.logger.exception("MQTT connectivity probe error")
+            return False
+        finally:
+            self.client.loop_stop()
+            self.client.disconnect()
+
+
+def test_connectivity(logger: logging.Logger) -> int:
+    logger.info("Running connectivity tests")
+
+    sql_ok = False
+    mqtt_ok = False
+
+    try:
+        conn = pyodbc.connect(get_sql_connection_string(), autocommit=True)
+        cursor = conn.cursor()
+        cursor.execute("SELECT 1")
+        cursor.fetchone()
+        cursor.close()
+        conn.close()
+        sql_ok = True
+        logger.info("SQL connectivity OK")
+    except Exception:
+        logger.exception("SQL connectivity failed")
+
+    mqtt_ok = MqttConnectivityProbe(logger).run()
+
+    if sql_ok and mqtt_ok:
+        logger.info("Connectivity test passed")
+        return 0
+
+    logger.error("Connectivity test failed")
+    return 1
+
+
+def main() -> int:
+    load_dotenv()
+    logger = configure_logging()
+
+    parser = argparse.ArgumentParser(description="Subscribe to KYZ interval MQTT and ingest into Azure SQL")
+    parser.add_argument("--test-conn", action="store_true", help="Test MQTT and SQL connectivity then exit")
+    args = parser.parse_args()
+
+    try:
+        if args.test_conn:
+            return test_connectivity(logger)
+
+        ingestor = IntervalIngestor(logger)
+        service = MqttSqlService(logger, ingestor)
+
+        def _shutdown_handler(signum: int, frame: Any) -> None:
+            logger.info("Received signal %s, shutting down", signum)
+            service.stop()
+
+        signal.signal(signal.SIGINT, _shutdown_handler)
+        signal.signal(signal.SIGTERM, _shutdown_handler)
+
+        service.run()
+        return 0
+    except ConfigError:
+        logger.exception("Configuration error")
+        return 2
+    except Exception:
+        logger.exception("Fatal error")
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
