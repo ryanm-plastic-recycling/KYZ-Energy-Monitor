@@ -132,11 +132,11 @@ class IntervalIngestor:
             INSERT INTO dbo.KYZ_Interval (
                 IntervalEnd,
                 PulseCount,
-                kWh,
-                kW,
+                Interval_kWh,
+                Interval_kW,
                 Total_kWh,
-                R17Exclude,
-                KyzInvalidAlarm
+                R17_ExcludeDemand,
+                KYZ_InvalidAlarm
             )
             SELECT ?, ?, ?, ?, ?, ?, ?
             WHERE NOT EXISTS (
@@ -152,8 +152,8 @@ class IntervalIngestor:
             data["kWh"],
             data["kW"],
             data["total_kWh"],
-            data["r17Exclude"],
-            data["kyzInvalidAlarm"],
+            1 if data["r17Exclude"] else 0,
+            1 if data["kyzInvalidAlarm"] else 0,
             data["intervalEnd"],
         )
 
