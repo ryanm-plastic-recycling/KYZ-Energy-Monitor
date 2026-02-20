@@ -181,3 +181,25 @@ CREATE TABLE dbo.KYZ_Interval (
 
 - Idempotency relies on `IntervalEnd` uniqueness in the existing table.
 - If duplicates arrive, they are skipped and logged.
+
+## Plant Energy Dashboard (Self-Hosted Web UI)
+
+A built-in dashboard stack is available under `dashboard/`:
+- `dashboard/api`: FastAPI backend that reads from `dbo.KYZ_Interval`
+- `dashboard/web`: React + TypeScript frontend (dashboard + kiosk routes)
+
+See `dashboard/README.md` for full installation and Windows Server service setup.
+
+Run ingestor + dashboard together on the same server:
+
+1. Start ingestor:
+   ```bash
+   python main.py
+   ```
+2. Start dashboard API:
+   ```bash
+   uvicorn dashboard.api.app:app --host 0.0.0.0 --port 8080
+   ```
+3. Open dashboard:
+   - `http://<server>:8080/`
+   - `http://<server>:8080/kiosk?refresh=10&theme=dark`
