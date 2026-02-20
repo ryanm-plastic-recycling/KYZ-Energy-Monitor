@@ -3,3 +3,7 @@ __pycache__/
 *.pyc
 .env
 logs/
+
+dashboard/web/node_modules/
+dashboard/web/dist/
+dashboard/api/.venv/
