@@ -131,7 +131,7 @@ async def auth_middleware(request: Request, call_next: Callable[..., Any]) -> JS
     if request.url.path.startswith("/api"):
         auth_token = os.getenv("DASHBOARD_AUTH_TOKEN", "").strip()
         if auth_token:
-            provided = request.headers.get("X-Auth-Token", "")
+            provided = request.headers.get("X-Auth-Token", "") or request.query_params.get("token", "")
             if provided != auth_token:
                 return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
     return await call_next(request)

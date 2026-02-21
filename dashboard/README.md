@@ -19,7 +19,8 @@ Self-hosted dashboard stack for KYZ interval data in `dbo.KYZ_Interval`.
 - `GET /api/stream` (SSE, polls latest row every `DASHBOARD_SSE_POLL_SECONDS`, default 5s)
 
 Optional API auth:
-- Set `DASHBOARD_AUTH_TOKEN` to require `X-Auth-Token` on all `/api/*` routes.
+- Set `DASHBOARD_AUTH_TOKEN` to require auth on all `/api/*` routes.
+- Clients can send token in either `X-Auth-Token` header or `?token=` query parameter (useful for kiosk SSE/EventSource).
 
 ## Environment Variables
 
@@ -139,3 +140,18 @@ msedge.exe --kiosk "http://localhost:8080/kiosk?refresh=10&theme=dark" --edge-ki
 
 - Dashboard API logs to `logs/dashboard_api.log` (daily rotation).
 - Ingestor service in `main.py` is unchanged and can run in parallel on the same server.
+
+
+## Windows automation scripts
+
+Use scripts in `scripts/windows` from repo root:
+
+- `install_ingestor.ps1`
+- `install_dashboard.ps1`
+- `create_taskscheduler_jobs.ps1` (creates `KYZ-Ingestor` + `KYZ-Dashboard-API` startup tasks)
+- `smoke_test.ps1`
+
+Operational runbook and deployment docs are under `docs/`:
+- `docs/DEPLOYMENT_WINDOWS_SERVER.md`
+- `docs/MOSQUITTO_SETUP.md`
+- `docs/RUNBOOK.md`

@@ -7,6 +7,7 @@ export function KioskPage() {
   const params = new URLSearchParams(window.location.search)
   const refresh = Number(params.get('refresh') ?? 10) * 1000
   const theme = params.get('theme') ?? 'light'
+  const token = params.get('token')
 
   const [health, setHealth] = useState<Health | null>(null)
   const [latest, setLatest] = useState<LatestRow | null>(null)
@@ -26,7 +27,8 @@ export function KioskPage() {
   useEffect(() => {
     load()
     const timer = setInterval(load, refresh)
-    const source = new EventSource('/api/stream')
+    const streamUrl = token ? `/api/stream?token=${encodeURIComponent(token)}` : '/api/stream'
+    const source = new EventSource(streamUrl)
     source.addEventListener('latest', (event) => {
       const data = JSON.parse((event as MessageEvent).data) as LatestRow
       setLatest(data)
@@ -36,7 +38,7 @@ export function KioskPage() {
       clearInterval(timer)
       source.close()
     }
-  }, [refresh])
+  }, [refresh, token])
 
   const stale = (health?.secondsSinceLatest ?? 99999) > 1800
   const cls = useMemo(() => (theme === 'dark' ? 'kiosk dark' : 'kiosk'), [theme])

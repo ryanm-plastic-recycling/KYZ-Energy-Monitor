@@ -150,6 +150,20 @@ Example payload template:
      - Arguments: `C:\apps\kyz-energy-monitor\main.py`
      - Start in: `C:\apps\kyz-energy-monitor`
 
+
+## Windows Server Ops Docs
+
+For hardened Windows deployment and operations, see:
+- `docs/DEPLOYMENT_WINDOWS_SERVER.md`
+- `docs/MOSQUITTO_SETUP.md`
+- `docs/RUNBOOK.md`
+
+Automation scripts (Task Scheduler + smoke test):
+- `scripts/windows/install_ingestor.ps1`
+- `scripts/windows/install_dashboard.ps1`
+- `scripts/windows/create_taskscheduler_jobs.ps1`
+- `scripts/windows/smoke_test.ps1`
+
 ## SQL Scripts
 
 This application does not execute DDL. Apply these scripts manually via Azure Data Studio / VS Code:
