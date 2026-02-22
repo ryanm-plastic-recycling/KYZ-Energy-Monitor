@@ -12,7 +12,7 @@ Set-Location $RepoRoot
 
 if (-not (Test-Path '.env')) {
     Copy-Item '.env.example' '.env'
-    Write-Host 'Created .env from .env.example. Fill in SQL settings (and optional DASHBOARD_* settings).'
+    Write-Host 'Created .env from .env.example. Fill in SQL settings plus optional DASHBOARD_*, PLANT_NAME, and TARIFF_* settings.'
 }
 
 Push-Location "$RepoRoot\dashboard\web"

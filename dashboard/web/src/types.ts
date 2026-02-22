@@ -14,3 +14,47 @@ export type Health = {
   latestIntervalEnd: string | null
   secondsSinceLatest: number | null
 }
+
+export type Summary = {
+  plantName: string
+  lastUpdated: string | null
+  currentKW: number | null
+  todayKWh: number
+  todayPeakKW: number
+  mtdKWh: number
+  energyEstimateMonth: number
+  currentMonthTop3AvgKW: number
+  ratchetFloorKW: number
+  billedDemandEstimateKW: number
+  demandEstimateMonth: number
+  costOf100kwPeakAnnual: number
+}
+
+export type BillingMonth = {
+  monthStart: string
+  top3AvgKW: number
+  ratchetFloorKW: number
+  billedDemandKW: number
+  demandCost: number
+  energyKWh: number
+  energyCost: number
+  customerCharge: number
+  totalEstimatedCost: number
+}
+
+export type Quality = {
+  expectedIntervals24h: number
+  observedIntervals24h: number
+  missingIntervals24h: number
+  kyzInvalidAlarm: { last24h: number; last7d: number }
+  r17Exclude: { last24h: number; last7d: number }
+}
+
+export type Metrics = {
+  dbConnected: boolean
+  lastIntervalEnd: string | null
+  secondsSinceLastInterval: number | null
+  rowCount24h: number
+  r17Exclude24h: number
+  kyzInvalidAlarm24h: number
+}
