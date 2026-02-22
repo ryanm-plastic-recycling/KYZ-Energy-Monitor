@@ -17,6 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
+from dashboard.api.analytics import BillingMonth, TariffConfig, annualized_peak_cost, compute_billing_series
 
 load_dotenv()
 
@@ -48,13 +49,7 @@ def configure_logging() -> logging.Logger:
     logs_dir = Path("logs")
     logs_dir.mkdir(parents=True, exist_ok=True)
 
-    logger = logging.getLogger("dashboard_api")
-    logger.setLevel(logging.INFO)
-
-    formatter = logging.Formatter(
-        "%(asctime)s %(levelname)s [%(threadName)s] %(name)s - %(message)s"
-    )
-
+    formatter = logging.Formatter("%(asctime)s %(levelname)s [%(threadName)s] %(name)s - %(message)s")
     file_handler = TimedRotatingFileHandler(
         logs_dir / "dashboard_api.log",
         when="midnight",
@@ -67,24 +62,49 @@ def configure_logging() -> logging.Logger:
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setFormatter(formatter)
 
-    logger.handlers.clear()
-    logger.addHandler(file_handler)
-    logger.addHandler(console_handler)
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.INFO)
+    root_logger.handlers.clear()
+    root_logger.addHandler(file_handler)
+    root_logger.addHandler(console_handler)
 
-    return logger
+    for logger_name in ("uvicorn", "uvicorn.access", "uvicorn.error", "fastapi"):
+        named = logging.getLogger(logger_name)
+        named.handlers.clear()
+        named.propagate = True
+
+    return logging.getLogger("dashboard_api")
 
 
 logger = configure_logging()
 cache = TTLCache()
 
 
+def get_tariff_config() -> TariffConfig:
+    return TariffConfig(
+        customer_charge=float(os.getenv("TARIFF_CUSTOMER_CHARGE", "120.00")),
+        demand_rate_per_kw=float(os.getenv("TARIFF_DEMAND_RATE_PER_KW", "24.74")),
+        energy_rate_per_kwh=float(os.getenv("TARIFF_ENERGY_RATE_PER_KWH", "0.04143")),
+        ratchet_percent=float(os.getenv("TARIFF_RATCHET_PERCENT", "0.60")),
+        min_billing_kw=float(os.getenv("TARIFF_MIN_BILLING_KW", "50")),
+    )
+
+
+def get_series_max_days() -> int:
+    return int(os.getenv("API_SERIES_MAX_DAYS", "7"))
+
+
+def get_allow_extended_ranges() -> bool:
+    return os.getenv("API_ALLOW_EXTENDED_RANGE", "false").strip().lower() in {"1", "true", "yes"}
+
+
 def get_sql_connection_string() -> str:
     return (
         "DRIVER={ODBC Driver 18 for SQL Server};"
-        f"SERVER={os.getenv('SQL_SERVER','')};"
-        f"DATABASE={os.getenv('SQL_DATABASE','')};"
-        f"UID={os.getenv('SQL_USERNAME','')};"
-        f"PWD={os.getenv('SQL_PASSWORD','')};"
+        f"SERVER={os.getenv('SQL_SERVER', '')};"
+        f"DATABASE={os.getenv('SQL_DATABASE', '')};"
+        f"UID={os.getenv('SQL_USERNAME', '')};"
+        f"PWD={os.getenv('SQL_PASSWORD', '')};"
         "Encrypt=yes;"
         "TrustServerCertificate=no;"
         "Connection Timeout=15;"
@@ -114,6 +134,16 @@ def parse_iso(value: str) -> datetime:
         return datetime.fromisoformat(value.replace("Z", "+00:00")).replace(tzinfo=None)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=f"Invalid datetime: {value}") from exc
+
+
+def enforce_series_window(start_dt: datetime, end_dt: datetime) -> None:
+    if end_dt < start_dt:
+        raise HTTPException(status_code=400, detail="end must be >= start")
+    if get_allow_extended_ranges():
+        return
+    max_days = get_series_max_days()
+    if end_dt - start_dt > timedelta(days=max_days):
+        raise HTTPException(status_code=400, detail=f"Range exceeds limit of {max_days} days")
 
 
 app = FastAPI(title="Plant Energy Dashboard API")
@@ -164,6 +194,43 @@ def get_health() -> dict[str, Any]:
     }
 
 
+@app.get("/api/metrics")
+def get_metrics() -> dict[str, Any]:
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT
+                    MAX(IntervalEnd) AS lastIntervalEnd,
+                    COUNT(CASE WHEN IntervalEnd >= DATEADD(hour, -24, GETDATE()) THEN 1 END) AS rows24h,
+                    SUM(CASE WHEN IntervalEnd >= DATEADD(hour, -24, GETDATE()) AND ISNULL(R17Exclude,0)=1 THEN 1 ELSE 0 END) AS r17Exclude24h,
+                    SUM(CASE WHEN IntervalEnd >= DATEADD(hour, -24, GETDATE()) AND ISNULL(KyzInvalidAlarm,0)=1 THEN 1 ELSE 0 END) AS kyzInvalidAlarm24h
+                FROM dbo.KYZ_Interval
+                """
+            )
+            row = cursor.fetchone()
+        last_interval_end = row.lastIntervalEnd if row else None
+        return {
+            "dbConnected": True,
+            "lastIntervalEnd": last_interval_end.isoformat() if last_interval_end else None,
+            "secondsSinceLastInterval": int((datetime.now() - last_interval_end).total_seconds()) if last_interval_end else None,
+            "rowCount24h": int(row.rows24h or 0),
+            "r17Exclude24h": int(row.r17Exclude24h or 0),
+            "kyzInvalidAlarm24h": int(row.kyzInvalidAlarm24h or 0),
+        }
+    except Exception:
+        logger.exception("Metrics query failed")
+        return {
+            "dbConnected": False,
+            "lastIntervalEnd": None,
+            "secondsSinceLastInterval": None,
+            "rowCount24h": 0,
+            "r17Exclude24h": 0,
+            "kyzInvalidAlarm24h": 0,
+        }
+
+
 @app.get("/api/latest")
 def get_latest() -> dict[str, Any]:
     with get_db_connection() as conn:
@@ -183,26 +250,22 @@ def get_latest() -> dict[str, Any]:
 
 @app.get("/api/series")
 def get_series(minutes: int = 240, start: str | None = None, end: str | None = None) -> dict[str, Any]:
-    where_clause = "WHERE IntervalEnd >= ?"
-    params: list[Any] = [datetime.now() - timedelta(minutes=minutes)]
-
-    if start:
-        where_clause = "WHERE IntervalEnd >= ?"
-        params = [parse_iso(start)]
-    if end:
-        where_clause += " AND IntervalEnd <= ?"
-        params.append(parse_iso(end))
+    minutes = max(15, min(minutes, get_series_max_days() * 24 * 60))
+    end_dt = parse_iso(end) if end else datetime.now()
+    start_dt = parse_iso(start) if start else (end_dt - timedelta(minutes=minutes))
+    enforce_series_window(start_dt, end_dt)
 
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            f"""
+            """
             SELECT IntervalEnd, kW, kWh, R17Exclude, KyzInvalidAlarm
             FROM dbo.KYZ_Interval
-            {where_clause}
+            WHERE IntervalEnd >= ? AND IntervalEnd <= ?
             ORDER BY IntervalEnd ASC
             """,
-            tuple(params),
+            start_dt,
+            end_dt,
         )
         rows = cursor.fetchall()
 
@@ -219,6 +282,8 @@ def get_series(minutes: int = 240, start: str | None = None, end: str | None = N
         for row in rows
     ]
     return {"points": points}
+
+
 
 
 @app.get("/api/daily")
@@ -262,8 +327,69 @@ def get_daily(days: int = 14) -> dict[str, Any]:
 
 @app.get("/api/monthly-demand")
 def get_monthly_demand(months: int = 12) -> dict[str, Any]:
-    months = max(1, min(months, 36))
-    key = f"monthly:{months}"
+    payload = get_billing(months=max(12, min(months, 24)))
+    return {
+        "months": [
+            {
+                "monthStart": m["monthStart"],
+                "peak_kW": m["billedDemandKW"],
+                "top3_avg_kW": m["top3AvgKW"],
+            }
+            for m in payload["months"]
+        ]
+    }
+@app.get("/api/summary")
+def get_summary() -> dict[str, Any]:
+    tariff = get_tariff_config()
+    billing = get_billing(24)
+    months = billing["months"]
+    current_month = months[-1] if months else None
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT TOP 1 IntervalEnd, kW
+            FROM dbo.KYZ_Interval
+            ORDER BY IntervalEnd DESC
+            """
+        )
+        latest = cursor.fetchone()
+
+        cursor.execute(
+            """
+            SELECT
+                SUM(CASE WHEN CAST(IntervalEnd AS date)=CAST(GETDATE() AS date) THEN CAST(kWh AS float) ELSE 0 END) AS todayKwh,
+                MAX(CASE WHEN CAST(IntervalEnd AS date)=CAST(GETDATE() AS date) THEN CAST(kW AS float) END) AS todayPeakKw,
+                SUM(CASE WHEN IntervalEnd >= DATEFROMPARTS(YEAR(GETDATE()), MONTH(GETDATE()), 1) THEN CAST(kWh AS float) ELSE 0 END) AS mtdKwh,
+                MAX(CASE WHEN IntervalEnd >= DATEFROMPARTS(YEAR(GETDATE()), MONTH(GETDATE()), 1) THEN IntervalEnd END) AS lastUpdated
+            FROM dbo.KYZ_Interval
+            WHERE ISNULL(KyzInvalidAlarm,0)=0
+            """
+        )
+        totals = cursor.fetchone()
+
+    return {
+        "plantName": os.getenv("PLANT_NAME", "KYZ Plant"),
+        "lastUpdated": totals.lastUpdated.isoformat() if totals and totals.lastUpdated else None,
+        "currentKW": float(latest.kW) if latest and latest.kW is not None else None,
+        "todayKWh": float(totals.todayKwh or 0),
+        "todayPeakKW": float(totals.todayPeakKw or 0),
+        "mtdKWh": float(totals.mtdKwh or 0),
+        "energyEstimateMonth": float((totals.mtdKwh or 0) * tariff.energy_rate_per_kwh),
+        "currentMonthTop3AvgKW": current_month["top3AvgKW"] if current_month else 0,
+        "ratchetFloorKW": current_month["ratchetFloorKW"] if current_month else tariff.min_billing_kw,
+        "billedDemandEstimateKW": current_month["billedDemandKW"] if current_month else tariff.min_billing_kw,
+        "demandEstimateMonth": current_month["demandCost"] if current_month else tariff.min_billing_kw * tariff.demand_rate_per_kw,
+        "costOf100kwPeakAnnual": annualized_peak_cost(100.0, tariff),
+    }
+
+
+@app.get("/api/billing")
+def get_billing(months: int = 24) -> dict[str, Any]:
+    months = max(12, min(months, 24))
+    tariff = get_tariff_config()
+    key = f"billing:{months}:{tariff}"
 
     def producer() -> dict[str, Any]:
         with get_db_connection() as conn:
@@ -273,42 +399,113 @@ def get_monthly_demand(months: int = 12) -> dict[str, Any]:
                 WITH base AS (
                     SELECT
                         DATEFROMPARTS(YEAR(IntervalEnd), MONTH(IntervalEnd), 1) AS month_start,
-                        CAST(kW AS float) AS kW
+                        CAST(kW AS float) AS kW,
+                        CAST(kWh AS float) AS kWh,
+                        ISNULL(R17Exclude,0) AS r17,
+                        ISNULL(KyzInvalidAlarm,0) AS invalid
                     FROM dbo.KYZ_Interval
                     WHERE IntervalEnd >= DATEADD(month, -?, DATEFROMPARTS(YEAR(GETDATE()), MONTH(GETDATE()), 1))
-                      AND ISNULL(KyzInvalidAlarm, 0) = 0
-                      AND ISNULL(R17Exclude, 0) = 0
                 ), ranked AS (
                     SELECT
                         month_start,
                         kW,
                         ROW_NUMBER() OVER (PARTITION BY month_start ORDER BY kW DESC) AS rn
                     FROM base
+                    WHERE invalid = 0 AND r17 = 0
+                ), top3 AS (
+                    SELECT month_start, AVG(kW) AS top3_avg_kW
+                    FROM ranked
+                    WHERE rn <= 3
+                    GROUP BY month_start
+                ), energy AS (
+                    SELECT month_start, SUM(CASE WHEN invalid = 0 THEN kWh ELSE 0 END) AS energy_kWh
+                    FROM base
+                    GROUP BY month_start
                 )
-                SELECT
-                    b.month_start,
-                    MAX(b.kW) AS peak_kW,
-                    AVG(CASE WHEN r.rn <= 3 THEN r.kW END) AS top3_avg_kW
-                FROM base b
-                LEFT JOIN ranked r ON r.month_start = b.month_start
-                GROUP BY b.month_start
-                ORDER BY b.month_start ASC
+                SELECT e.month_start, t.top3_avg_kW, e.energy_kWh
+                FROM energy e
+                LEFT JOIN top3 t ON t.month_start = e.month_start
+                ORDER BY e.month_start ASC
                 """,
                 months,
             )
             rows = cursor.fetchall()
+
+        source = [
+            BillingMonth(
+                month_start=row.month_start,
+                top3_avg_kw=float(row.top3_avg_kW or 0),
+                energy_kwh=float(row.energy_kWh or 0),
+            )
+            for row in rows
+        ]
+        series = compute_billing_series(source, tariff)
+
         return {
+            "tariff": {
+                "customerCharge": tariff.customer_charge,
+                "demandRatePerKW": tariff.demand_rate_per_kw,
+                "energyRatePerKWh": tariff.energy_rate_per_kwh,
+                "ratchetPercent": tariff.ratchet_percent,
+                "minBillingKW": tariff.min_billing_kw,
+            },
             "months": [
                 {
                     "monthStart": row.month_start.isoformat(),
-                    "peak_kW": float(row.peak_kW) if row.peak_kW is not None else 0.0,
-                    "top3_avg_kW": float(row.top3_avg_kW) if row.top3_avg_kW is not None else 0.0,
+                    "top3AvgKW": row.top3_avg_kw,
+                    "ratchetFloorKW": row.ratchet_floor_kw,
+                    "billedDemandKW": row.billed_demand_kw,
+                    "demandCost": row.demand_cost,
+                    "energyKWh": row.energy_kwh,
+                    "energyCost": row.energy_cost,
+                    "customerCharge": row.customer_charge,
+                    "totalEstimatedCost": row.total_estimated_cost,
                 }
-                for row in rows
-            ]
+                for row in series
+            ],
         }
 
     return cache.get_or_set(key, ttl_seconds=30, producer=producer)
+
+
+@app.get("/api/quality")
+def get_quality() -> dict[str, Any]:
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            WITH ordered AS (
+                SELECT IntervalEnd,
+                       LAG(IntervalEnd) OVER (ORDER BY IntervalEnd) AS prev_end
+                FROM dbo.KYZ_Interval
+                WHERE IntervalEnd >= DATEADD(hour, -24, GETDATE())
+            )
+            SELECT
+                SUM(CASE WHEN prev_end IS NOT NULL AND DATEDIFF(minute, prev_end, IntervalEnd) > 15
+                    THEN (DATEDIFF(minute, prev_end, IntervalEnd) / 15) - 1
+                    ELSE 0 END) AS missing24h,
+                SUM(CASE WHEN IntervalEnd >= DATEADD(hour, -24, GETDATE()) AND ISNULL(KyzInvalidAlarm,0)=1 THEN 1 ELSE 0 END) AS invalid24h,
+                SUM(CASE WHEN IntervalEnd >= DATEADD(day, -7, GETDATE()) AND ISNULL(KyzInvalidAlarm,0)=1 THEN 1 ELSE 0 END) AS invalid7d,
+                SUM(CASE WHEN IntervalEnd >= DATEADD(hour, -24, GETDATE()) AND ISNULL(R17Exclude,0)=1 THEN 1 ELSE 0 END) AS r1724h,
+                SUM(CASE WHEN IntervalEnd >= DATEADD(day, -7, GETDATE()) AND ISNULL(R17Exclude,0)=1 THEN 1 ELSE 0 END) AS r177d,
+                SUM(CASE WHEN IntervalEnd >= DATEADD(hour, -24, GETDATE()) THEN 1 ELSE 0 END) AS observed24h
+            FROM dbo.KYZ_Interval
+            LEFT JOIN ordered o ON o.IntervalEnd = dbo.KYZ_Interval.IntervalEnd
+            """
+        )
+        row = cursor.fetchone()
+
+    expected = 96
+    observed = int(row.observed24h or 0)
+    missing = int(row.missing24h or max(expected - observed, 0))
+
+    return {
+        "expectedIntervals24h": expected,
+        "observedIntervals24h": observed,
+        "missingIntervals24h": missing,
+        "kyzInvalidAlarm": {"last24h": int(row.invalid24h or 0), "last7d": int(row.invalid7d or 0)},
+        "r17Exclude": {"last24h": int(row.r1724h or 0), "last7d": int(row.r177d or 0)},
+    }
 
 
 @app.get("/api/stream")
@@ -342,7 +539,7 @@ def get_stream() -> StreamingResponse:
                 return
             except Exception:
                 logger.exception("SSE polling failed")
-                yield "event: error\ndata: {\"message\":\"poll failure\"}\n\n"
+                yield 'event: error\ndata: {"message":"poll failure"}\n\n'
 
             time.sleep(poll_seconds)
 

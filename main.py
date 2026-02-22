@@ -117,15 +117,60 @@ def validate_payload(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def is_transient_sql_error(exc: pyodbc.Error) -> bool:
+    sql_state = ""
+    if getattr(exc, "args", None):
+        sql_state = str(exc.args[0])
+    transient_prefixes = ("08", "40", "HYT")
+    return sql_state.startswith(transient_prefixes)
+
+
 class IntervalIngestor:
     def __init__(self, logger: logging.Logger):
         self.logger = logger
         self.conn_str = get_sql_connection_string()
-        self.conn = pyodbc.connect(self.conn_str, autocommit=False)
+        self.conn: pyodbc.Connection | None = None
         self.lock = threading.Lock()
+        self._connect_with_backoff()
+
+    def _connect_with_backoff(self) -> None:
+        attempt = 0
+        max_delay = 60
+        while self.conn is None:
+            attempt += 1
+            try:
+                self.conn = pyodbc.connect(self.conn_str, autocommit=False)
+                self.logger.info("SQL connection established")
+            except pyodbc.Error:
+                delay = min(2 ** min(attempt, 6), max_delay)
+                self.logger.exception("SQL connection failed (attempt %s). Retrying in %ss", attempt, delay)
+                time.sleep(delay)
+
+    def _ensure_connection(self) -> pyodbc.Connection:
+        if self.conn is None:
+            self._connect_with_backoff()
+        assert self.conn is not None
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT 1")
+            cursor.fetchone()
+            cursor.close()
+            return self.conn
+        except pyodbc.Error:
+            self.logger.exception("SQL connection lost; reconnecting")
+            try:
+                self.conn.close()
+            except Exception:
+                pass
+            self.conn = None
+            self._connect_with_backoff()
+            assert self.conn is not None
+            return self.conn
 
     def close(self) -> None:
-        self.conn.close()
+        if self.conn is not None:
+            self.conn.close()
+            self.conn = None
 
     def insert_interval(self, data: dict[str, Any]) -> None:
         sql = """
@@ -158,21 +203,36 @@ class IntervalIngestor:
         )
 
         with self.lock:
-            cursor = self.conn.cursor()
-            try:
-                cursor.execute(sql, params)
-                inserted = cursor.rowcount
-                self.conn.commit()
-            except Exception:
-                self.conn.rollback()
-                raise
-            finally:
-                cursor.close()
-
-        if inserted == 0:
-            self.logger.info("Skipped duplicate intervalEnd=%s", data["intervalEnd"])
-        else:
-            self.logger.info("Inserted intervalEnd=%s", data["intervalEnd"])
+            for attempt in range(1, 4):
+                conn = self._ensure_connection()
+                cursor = conn.cursor()
+                try:
+                    cursor.execute(sql, params)
+                    inserted = cursor.rowcount
+                    conn.commit()
+                    if inserted == 0:
+                        self.logger.info("Skipped duplicate intervalEnd=%s", data["intervalEnd"])
+                    else:
+                        self.logger.info("Inserted intervalEnd=%s", data["intervalEnd"])
+                    return
+                except pyodbc.Error as exc:
+                    conn.rollback()
+                    if is_transient_sql_error(exc) and attempt < 3:
+                        self.logger.warning(
+                            "Transient SQL write failure for intervalEnd=%s (attempt %s). Reconnecting.",
+                            data["intervalEnd"],
+                            attempt,
+                        )
+                        try:
+                            conn.close()
+                        except Exception:
+                            pass
+                        self.conn = None
+                        time.sleep(attempt)
+                        continue
+                    raise
+                finally:
+                    cursor.close()
 
 
 class MqttSqlService:
@@ -193,6 +253,7 @@ class MqttSqlService:
             client_id=self.mqtt_client_id,
             clean_session=True,
         )
+        self.client.reconnect_delay_set(min_delay=1, max_delay=60)
 
         if self.mqtt_username:
             self.client.username_pw_set(self.mqtt_username, self.mqtt_password)
@@ -222,9 +283,20 @@ class MqttSqlService:
         except Exception:
             self.logger.exception("Failed to process MQTT payload on topic %s", msg.topic)
 
+    def _connect_mqtt_with_backoff(self) -> None:
+        delay = 1
+        while not self.stop_event.is_set():
+            try:
+                self.client.connect(self.mqtt_host, self.mqtt_port, self.mqtt_keepalive)
+                return
+            except Exception:
+                self.logger.exception("MQTT connect failed, retrying in %ss", delay)
+                time.sleep(delay)
+                delay = min(delay * 2, 60)
+
     def run(self) -> None:
         self.logger.info("Starting MQTT SQL service")
-        self.client.connect(self.mqtt_host, self.mqtt_port, self.mqtt_keepalive)
+        self._connect_mqtt_with_backoff()
         self.client.loop_start()
 
         while not self.stop_event.is_set():
@@ -288,7 +360,6 @@ def test_connectivity(logger: logging.Logger) -> int:
     logger.info("Running connectivity tests")
 
     sql_ok = False
-    mqtt_ok = False
 
     try:
         conn = pyodbc.connect(get_sql_connection_string(), autocommit=True)

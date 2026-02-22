@@ -1,157 +1,57 @@
 # Plant Energy Dashboard
 
-Self-hosted dashboard stack for KYZ interval data in `dbo.KYZ_Interval`.
+Self-hosted dashboard stack for KYZ interval data in `dbo.KYZ_Interval`, supporting **Windows 11 x64** and **Python 3.13**.
 
-## Overview
+## Stack
 
-- **Backend API**: `dashboard/api` (FastAPI + pyodbc)
-- **Frontend SPA**: `dashboard/web` (React + TypeScript + Vite + ECharts)
-- **Static hosting**: build web app and copy `dashboard/web/dist/*` into `dashboard/api/static/`
-- Uses existing `SQL_*` environment variables from the ingestor.
+- Backend API: `dashboard/api` (FastAPI + pyodbc)
+- Frontend SPA: `dashboard/web` (React + TypeScript + Vite + ECharts)
+- Static hosting: copy `dashboard/web/dist/*` into `dashboard/api/static/`
 
-## API Endpoints
+## Prerequisites
+
+- Python 3.13 x64
+- Node.js LTS (required for frontend build)
+- ODBC Driver 18 for SQL Server
+
+## API endpoints
 
 - `GET /api/health`
+- `GET /api/metrics`
 - `GET /api/latest`
 - `GET /api/series?minutes=240&start=<iso>&end=<iso>`
-- `GET /api/daily?days=14`
-- `GET /api/monthly-demand?months=12`
-- `GET /api/stream` (SSE, polls latest row every `DASHBOARD_SSE_POLL_SECONDS`, default 5s)
+- `GET /api/summary`
+- `GET /api/billing?months=24`
+- `GET /api/quality`
+- `GET /api/daily`
+- `GET /api/monthly-demand`
+- `GET /api/stream`
 
-Optional API auth:
-- Set `DASHBOARD_AUTH_TOKEN` to require auth on all `/api/*` routes.
-- Clients can send token in either `X-Auth-Token` header or `?token=` query parameter (useful for kiosk SSE/EventSource).
+Optional API auth remains unchanged: `DASHBOARD_AUTH_TOKEN` can be provided in `X-Auth-Token` header or `?token=` query string.
 
-## Environment Variables
-
-Required (reuse from ingestor):
-- `SQL_SERVER`
-- `SQL_DATABASE`
-- `SQL_USERNAME`
-- `SQL_PASSWORD`
-
-Dashboard-specific:
-- `DASHBOARD_HOST` (default `0.0.0.0`)
-- `DASHBOARD_PORT` (default `8080`)
-- `DASHBOARD_AUTH_TOKEN` (optional)
-- `DASHBOARD_SSE_POLL_SECONDS` (default `5`)
-
-## Local Build + Run
-
-### 1) Build frontend
-
-```bash
-cd dashboard/web
-npm install
-npm run build
-```
-
-### 2) Copy frontend into API static folder
-
-```bash
-# from repo root
-mkdir -p dashboard/api/static
-cp -r dashboard/web/dist/* dashboard/api/static/
-```
-
-### 3) Setup backend venv + install
-
-```bash
-# from repo root
-python -m venv dashboard/api/.venv
-source dashboard/api/.venv/bin/activate
-pip install --upgrade pip
-pip install -r dashboard/api/requirements.txt
-```
-
-### 4) Run API server
-
-```bash
-# from repo root
-uvicorn dashboard.api.app:app --host ${DASHBOARD_HOST:-0.0.0.0} --port ${DASHBOARD_PORT:-8080}
-```
-
-Open:
-- `http://<server>:8080/` for dashboard
-- `http://<server>:8080/kiosk` for TV layout
-
-## Windows Server Deployment
-
-### Prerequisites
-
-1. Install **Python 3.11 x64**
-2. Install **Node.js LTS** (for frontend build)
-3. Install **ODBC Driver 18 for SQL Server**
-
-### Build frontend (PowerShell)
+## PowerShell build/run
 
 ```powershell
-cd C:\apps\kyz-energy-monitor\dashboard\web
+Set-Location C:\apps\kyz-energy-monitor\dashboard\web
 npm install
 npm run build
 New-Item -ItemType Directory -Force C:\apps\kyz-energy-monitor\dashboard\api\static | Out-Null
 Copy-Item -Force -Recurse .\dist\* C:\apps\kyz-energy-monitor\dashboard\api\static\
-```
 
-### Backend venv + run (PowerShell)
-
-```powershell
-cd C:\apps\kyz-energy-monitor
+Set-Location C:\apps\kyz-energy-monitor
 python -m venv dashboard\api\.venv
-dashboard\api\.venv\Scripts\activate
-pip install --upgrade pip
-pip install -r dashboard\api\requirements.txt
-uvicorn dashboard.api.app:app --host 0.0.0.0 --port 8080
+dashboard\api\.venv\Scripts\python.exe -m pip install --upgrade pip
+dashboard\api\.venv\Scripts\python.exe -m pip install -r dashboard\api\requirements.txt
+dashboard\api\.venv\Scripts\python.exe -m uvicorn dashboard.api.app:app --host 0.0.0.0 --port 8080
 ```
 
-## Run as a background process
+Routes:
+- `/` Executive default
+- `/operations`
+- `/billing-risk`
+- `/data-quality`
+- `/kiosk` (TV mode)
 
-### Option A: Task Scheduler
+## Logging
 
-- Program/script:
-  `C:\apps\kyz-energy-monitor\dashboard\api\.venv\Scripts\python.exe`
-- Add arguments:
-  `-m uvicorn dashboard.api.app:app --host 0.0.0.0 --port 8080`
-- Start in:
-  `C:\apps\kyz-energy-monitor`
-- Trigger: At startup
-- Recovery: Restart task on failure
-
-### Option B: NSSM
-
-```powershell
-nssm install KYZ-Dashboard-API "C:\apps\kyz-energy-monitor\dashboard\api\.venv\Scripts\python.exe" "-m uvicorn dashboard.api.app:app --host 0.0.0.0 --port 8080"
-nssm set KYZ-Dashboard-API AppDirectory "C:\apps\kyz-energy-monitor"
-nssm start KYZ-Dashboard-API
-```
-
-## TV/Kiosk Setup
-
-- Use Chromium/Edge kiosk mode:
-
-```powershell
-msedge.exe --kiosk "http://localhost:8080/kiosk?refresh=10&theme=dark" --edge-kiosk-type=fullscreen
-```
-
-- Recommended refresh parameter: `?refresh=10` or `?refresh=15`.
-- If auth token is enabled, append `&token=<token>` in kiosk URL (LAN-only trusted TVs).
-
-## Notes
-
-- Dashboard API logs to `logs/dashboard_api.log` (daily rotation).
-- Ingestor service in `main.py` is unchanged and can run in parallel on the same server.
-
-
-## Windows automation scripts
-
-Use scripts in `scripts/windows` from repo root:
-
-- `install_ingestor.ps1`
-- `install_dashboard.ps1`
-- `create_taskscheduler_jobs.ps1` (creates `KYZ-Ingestor` + `KYZ-Dashboard-API` startup tasks)
-- `smoke_test.ps1`
-
-Operational runbook and deployment docs are under `docs/`:
-- `docs/DEPLOYMENT_WINDOWS_SERVER.md`
-- `docs/MOSQUITTO_SETUP.md`
-- `docs/RUNBOOK.md`
+Dashboard API and uvicorn logs are written to `logs/dashboard_api.log` with daily rotation and 30-day retention.
