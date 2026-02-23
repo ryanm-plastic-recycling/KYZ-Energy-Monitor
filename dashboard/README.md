@@ -55,3 +55,17 @@ Routes:
 ## Logging
 
 Dashboard API and uvicorn logs are written to `logs/dashboard_api.log` with daily rotation and 30-day retention.
+
+## SQL credentials and least-privilege roles
+
+Dashboard API credential lookup order:
+
+1. `SQL_RO_USERNAME` + `SQL_RO_PASSWORD` when both are set
+2. Otherwise falls back to `SQL_USERNAME` + `SQL_PASSWORD`
+
+Recommended SQL users/permissions:
+
+- `kyz_ingestor`: `INSERT` on `dbo.KYZ_Interval` (optionally `SELECT` for troubleshooting)
+- `kyz_dashboard`: `SELECT` only on `dbo.KYZ_Interval` and dashboard views
+
+`GET /api/health` now includes `credentialMode` with value `"ro"` or `"rw"` to indicate which credential set is active, without exposing usernames/passwords.

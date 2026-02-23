@@ -99,16 +99,26 @@ def get_allow_extended_ranges() -> bool:
 
 
 def get_sql_connection_string() -> str:
+    username, password, _ = resolve_dashboard_sql_credentials()
     return (
         "DRIVER={ODBC Driver 18 for SQL Server};"
         f"SERVER={os.getenv('SQL_SERVER', '')};"
         f"DATABASE={os.getenv('SQL_DATABASE', '')};"
-        f"UID={os.getenv('SQL_USERNAME', '')};"
-        f"PWD={os.getenv('SQL_PASSWORD', '')};"
+        f"UID={username};"
+        f"PWD={password};"
         "Encrypt=yes;"
         "TrustServerCertificate=no;"
         "Connection Timeout=15;"
     )
+
+
+def resolve_dashboard_sql_credentials() -> tuple[str, str, str]:
+    ro_username = os.getenv("SQL_RO_USERNAME", "").strip()
+    ro_password = os.getenv("SQL_RO_PASSWORD", "")
+    if ro_username and ro_password:
+        return ro_username, ro_password, "ro"
+
+    return os.getenv("SQL_USERNAME", ""), os.getenv("SQL_PASSWORD", ""), "rw"
 
 
 def get_db_connection() -> pyodbc.Connection:
@@ -186,11 +196,14 @@ def get_health() -> dict[str, Any]:
     except Exception:
         logger.exception("Health check DB failure")
 
+    _, _, credential_mode = resolve_dashboard_sql_credentials()
+
     return {
         "serverTime": server_time.isoformat(),
         "dbConnected": db_connected,
         "latestIntervalEnd": latest_interval_end.isoformat() if latest_interval_end else None,
         "secondsSinceLatest": seconds_since_latest,
+        "credentialMode": credential_mode,
     }
 
 
