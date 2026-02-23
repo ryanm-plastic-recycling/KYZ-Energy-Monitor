@@ -481,34 +481,45 @@ def get_billing(months: int = 24) -> dict[str, Any]:
     return cache.get_or_set(key, ttl_seconds=30, producer=producer)
 
 
+def build_quality_query() -> str:
+    return """
+            WITH ordered AS (
+                SELECT k.IntervalEnd,
+                       LAG(k.IntervalEnd) OVER (ORDER BY k.IntervalEnd) AS prev_end
+                FROM dbo.KYZ_Interval k
+                WHERE k.IntervalEnd >= DATEADD(hour, -24, GETDATE())
+            )
+            SELECT
+                SUM(CASE WHEN o.prev_end IS NOT NULL AND DATEDIFF(minute, o.prev_end, k.IntervalEnd) > 15
+                    THEN (DATEDIFF(minute, o.prev_end, k.IntervalEnd) / 15) - 1
+                    ELSE 0 END) AS missing24h,
+                SUM(CASE WHEN k.IntervalEnd >= DATEADD(hour, -24, GETDATE()) AND ISNULL(k.KyzInvalidAlarm,0)=1 THEN 1 ELSE 0 END) AS invalid24h,
+                SUM(CASE WHEN k.IntervalEnd >= DATEADD(day, -7, GETDATE()) AND ISNULL(k.KyzInvalidAlarm,0)=1 THEN 1 ELSE 0 END) AS invalid7d,
+                SUM(CASE WHEN k.IntervalEnd >= DATEADD(hour, -24, GETDATE()) AND ISNULL(k.R17Exclude,0)=1 THEN 1 ELSE 0 END) AS r1724h,
+                SUM(CASE WHEN k.IntervalEnd >= DATEADD(day, -7, GETDATE()) AND ISNULL(k.R17Exclude,0)=1 THEN 1 ELSE 0 END) AS r177d,
+                SUM(CASE WHEN k.IntervalEnd >= DATEADD(hour, -24, GETDATE()) THEN 1 ELSE 0 END) AS observed24h
+            FROM dbo.KYZ_Interval k
+            LEFT JOIN ordered o ON o.IntervalEnd = k.IntervalEnd
+            """
+
+
 @app.get("/api/quality")
 def get_quality() -> dict[str, Any]:
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute(
-            """
-            WITH ordered AS (
-                SELECT IntervalEnd,
-                       LAG(IntervalEnd) OVER (ORDER BY IntervalEnd) AS prev_end
-                FROM dbo.KYZ_Interval
-                WHERE IntervalEnd >= DATEADD(hour, -24, GETDATE())
-            )
-            SELECT
-                SUM(CASE WHEN prev_end IS NOT NULL AND DATEDIFF(minute, prev_end, IntervalEnd) > 15
-                    THEN (DATEDIFF(minute, prev_end, IntervalEnd) / 15) - 1
-                    ELSE 0 END) AS missing24h,
-                SUM(CASE WHEN IntervalEnd >= DATEADD(hour, -24, GETDATE()) AND ISNULL(KyzInvalidAlarm,0)=1 THEN 1 ELSE 0 END) AS invalid24h,
-                SUM(CASE WHEN IntervalEnd >= DATEADD(day, -7, GETDATE()) AND ISNULL(KyzInvalidAlarm,0)=1 THEN 1 ELSE 0 END) AS invalid7d,
-                SUM(CASE WHEN IntervalEnd >= DATEADD(hour, -24, GETDATE()) AND ISNULL(R17Exclude,0)=1 THEN 1 ELSE 0 END) AS r1724h,
-                SUM(CASE WHEN IntervalEnd >= DATEADD(day, -7, GETDATE()) AND ISNULL(R17Exclude,0)=1 THEN 1 ELSE 0 END) AS r177d,
-                SUM(CASE WHEN IntervalEnd >= DATEADD(hour, -24, GETDATE()) THEN 1 ELSE 0 END) AS observed24h
-            FROM dbo.KYZ_Interval
-            LEFT JOIN ordered o ON o.IntervalEnd = dbo.KYZ_Interval.IntervalEnd
-            """
-        )
+        cursor.execute(build_quality_query())
         row = cursor.fetchone()
 
     expected = 96
+    if row is None:
+        return {
+            "expectedIntervals24h": expected,
+            "observedIntervals24h": 0,
+            "missingIntervals24h": 0,
+            "kyzInvalidAlarm": {"last24h": 0, "last7d": 0},
+            "r17Exclude": {"last24h": 0, "last7d": 0},
+        }
+
     observed = int(row.observed24h or 0)
     missing = int(row.missing24h or max(expected - observed, 0))
 
