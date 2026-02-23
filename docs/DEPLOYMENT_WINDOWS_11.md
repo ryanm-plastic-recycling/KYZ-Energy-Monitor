@@ -14,14 +14,13 @@ Copy-Item .env.example .env
 notepad .env
 
 python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
-python main.py --test-conn
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe main.py --test-conn
 
 Set-Location C:\apps\kyz-energy-monitor\dashboard\web
-npm install
-npm run build
+npm.cmd install
+npm.cmd run build
 New-Item -ItemType Directory -Force C:\apps\kyz-energy-monitor\dashboard\api\static | Out-Null
 Copy-Item -Force -Recurse .\dist\* C:\apps\kyz-energy-monitor\dashboard\api\static\
 
@@ -35,8 +34,30 @@ dashboard\api\.venv\Scripts\python.exe -m pip install -r dashboard\api\requireme
 
 ```powershell
 Set-Location C:\apps\kyz-energy-monitor
-python main.py
+.\.venv\Scripts\python.exe main.py
 dashboard\api\.venv\Scripts\python.exe -m uvicorn dashboard.api.app:app --host 0.0.0.0 --port 8080
+```
+
+## Troubleshooting (PowerShell)
+
+### PowerShell blocks scripts
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
+Get-ExecutionPolicy -List
+```
+
+### Verify ODBC Driver 18 is installed
+
+```powershell
+Get-OdbcDriver | Where-Object Name -Like "*ODBC Driver 18 for SQL Server*"
+```
+
+### Validate MQTT DNS and port reachability
+
+```powershell
+Resolve-DnsName your-mqtt-hostname
+Test-NetConnection your-mqtt-hostname -Port 1883
 ```
 
 Use `scripts/windows/*.ps1` for automated install/task scheduler setup.
