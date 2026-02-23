@@ -24,7 +24,7 @@ GO
 
 CREATE OR ALTER VIEW dbo.v_KYZ_Live15s_24h
 AS
-SELECT
+SELECT TOP (6480)
     SampleEnd AS t,
     kW,
     kWh
