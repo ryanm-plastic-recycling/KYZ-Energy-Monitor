@@ -1,7 +1,7 @@
 import ReactECharts from 'echarts-for-react'
 import { useEffect, useMemo, useState } from 'react'
 import { client } from './api'
-import type { Health, LatestRow } from './types'
+import type { Health, LatestRow, LiveLatestRow } from './types'
 
 export function KioskPage() {
   const params = new URLSearchParams(window.location.search)
@@ -11,14 +11,16 @@ export function KioskPage() {
 
   const [health, setHealth] = useState<Health | null>(null)
   const [latest, setLatest] = useState<LatestRow | null>(null)
+  const [liveLatest, setLiveLatest] = useState<LiveLatestRow | null>(null)
   const [series4h, setSeries4h] = useState<Array<{ t: string; kW: number }>>([])
 
   const load = async () => {
     try {
-      const [h, l, s] = await Promise.all([client.health(), client.latest(), client.series(240)])
+      const [h, l, s, ll] = await Promise.all([client.health(), client.latest(), client.series(240), client.liveLatest()])
       setHealth(h)
       setLatest(l)
       setSeries4h(s.points)
+      setLiveLatest(ll)
     } catch {
       // no-op for kiosk retry behavior
     }
@@ -53,7 +55,8 @@ export function KioskPage() {
         </div>
       </header>
       <section className="grid kpis kiosk-kpis">
-        <div className="card"><h3>Current kW</h3><p>{latest?.kW?.toFixed(2) ?? '—'}</p></div>
+        <div className="card"><h3>Live kW (15s)</h3><p>{liveLatest?.kW?.toFixed(2) ?? '—'}</p></div>
+        <div className="card"><h3>Current kW (15m demand)</h3><p>{latest?.kW?.toFixed(2) ?? '—'}</p></div>
         <div className="card"><h3>Current kWh</h3><p>{latest?.kWh?.toFixed(3) ?? '—'}</p></div>
         <div className="card"><h3>Pulse Count</h3><p>{latest?.PulseCount ?? '—'}</p></div>
       </section>

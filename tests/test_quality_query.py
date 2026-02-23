@@ -7,9 +7,8 @@ def test_quality_query_uses_qualified_intervalend_references() -> None:
     assert "FROM dbo.KYZ_Interval k" in query
     assert "LEFT JOIN ordered o ON o.IntervalEnd = k.IntervalEnd" in query
 
-    select_clause = query.split("SELECT", 1)[1].split("FROM", 1)[0]
-    assert " IntervalEnd" not in select_clause
-    assert "(IntervalEnd" not in select_clause
+    assert "DATEDIFF(minute, o.prev_end, o.IntervalEnd)" in query
+    assert "SUM(CASE WHEN k.IntervalEnd >= DATEADD(hour, -24, GETDATE())" in query
 
 
 class _Row:

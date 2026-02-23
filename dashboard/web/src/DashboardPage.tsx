@@ -2,7 +2,7 @@ import ReactECharts from 'echarts-for-react'
 import { useEffect, useState } from 'react'
 import { NavLink, Route, Routes } from 'react-router-dom'
 import { client } from './api'
-import type { BillingMonth, Metrics, Quality, Summary } from './types'
+import type { BillingMonth, LiveSeriesPoint, Metrics, Quality, Summary } from './types'
 
 const money = (n: number) => `$${n.toLocaleString(undefined, { maximumFractionDigits: 0 })}`
 
@@ -12,21 +12,24 @@ export function DashboardPage() {
   const [quality, setQuality] = useState<Quality | null>(null)
   const [metrics, setMetrics] = useState<Metrics | null>(null)
   const [series24h, setSeries24h] = useState<Array<{ t: string; kW: number }>>([])
+  const [liveSeries30m, setLiveSeries30m] = useState<LiveSeriesPoint[]>([])
 
   useEffect(() => {
     const load = async () => {
-      const [s, b, q, m, series] = await Promise.all([
+      const [s, b, q, m, series, liveSeries] = await Promise.all([
         client.summary(),
         client.billing(24),
         client.quality(),
         client.metrics(),
         client.series(24 * 60),
+        client.liveSeries(30),
       ])
       setSummary(s)
       setBilling(b.months)
       setQuality(q)
       setMetrics(m)
       setSeries24h(series.points)
+      setLiveSeries30m(liveSeries.points)
     }
     load().catch(() => undefined)
     const t = setInterval(() => load().catch(() => undefined), 15000)
@@ -52,7 +55,7 @@ export function DashboardPage() {
       </nav>
 
       <Routes>
-        <Route path="/" element={<Executive summary={summary} />} />
+        <Route path="/" element={<Executive summary={summary} liveSeries30m={liveSeries30m} />} />
         <Route path="/operations" element={<Operations series24h={series24h} metrics={metrics} />} />
         <Route path="/billing-risk" element={<BillingRisk summary={summary} billing={billing} />} />
         <Route path="/data-quality" element={<DataQuality quality={quality} />} />
@@ -61,9 +64,10 @@ export function DashboardPage() {
   )
 }
 
-function Executive({ summary }: { summary: Summary | null }) {
+function Executive({ summary, liveSeries30m }: { summary: Summary | null; liveSeries30m: LiveSeriesPoint[] }) {
   return <section className="grid kpis">
-    <Card t="Current kW" v={summary?.currentKW?.toFixed(2) ?? '—'} />
+    <Card t="Current kW (15m demand)" v={summary?.currentKW?.toFixed(2) ?? '—'} />
+    <Card t="Live kW (15s)" v={summary?.currentKW_15s?.toFixed(2) ?? '—'} />
     <Card t="Today kWh" v={summary?.todayKWh.toFixed(2) ?? '—'} />
     <Card t="Today Peak kW" v={summary?.todayPeakKW.toFixed(2) ?? '—'} />
     <Card t="MTD kWh" v={summary?.mtdKWh.toFixed(0) ?? '—'} />
@@ -73,6 +77,7 @@ function Executive({ summary }: { summary: Summary | null }) {
     <Card t="Billed Demand kW" v={summary?.billedDemandEstimateKW.toFixed(2) ?? '—'} />
     <Card t="Demand Est. $/month" v={summary ? money(summary.demandEstimateMonth) : '—'} />
     <Card t="Cost of 100 kW Peak" v={summary ? money(summary.costOf100kwPeakAnnual) + '/yr' : '—'} />
+    <div className="card chart-card full"><h3>Live kW - Last 30 Minutes</h3><ReactECharts style={{ height: 260 }} option={{ xAxis: { type: 'category', data: liveSeries30m.map((p) => new Date(p.t).toLocaleTimeString()) }, yAxis: { type: 'value', name: 'kW' }, series: [{ type: 'line', data: liveSeries30m.map((p) => p.kW), smooth: true, lineStyle: { color: '#00a3ff' } }] }} /></div>
   </section>
 }
 

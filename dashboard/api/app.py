@@ -139,6 +139,19 @@ def row_to_latest(row: Any) -> dict[str, Any]:
     }
 
 
+
+
+def row_to_live_latest(row: Any) -> dict[str, Any]:
+    if row is None:
+        return {}
+    return {
+        "SampleEnd": row.SampleEnd.isoformat() if row.SampleEnd else None,
+        "kW": float(row.kW) if row.kW is not None else None,
+        "kWh": float(row.kWh) if row.kWh is not None else None,
+        "PulseCount": int(row.PulseCount) if row.PulseCount is not None else None,
+        "Total_kWh": float(row.Total_kWh) if row.Total_kWh is not None else None,
+    }
+
 def parse_iso(value: str) -> datetime:
     try:
         return datetime.fromisoformat(value.replace("Z", "+00:00")).replace(tzinfo=None)
@@ -183,16 +196,29 @@ def get_health() -> dict[str, Any]:
     db_connected = False
     latest_interval_end = None
     seconds_since_latest = None
+    latest_live_end = None
+    seconds_since_latest_live = None
 
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT MAX(IntervalEnd) AS latestIntervalEnd FROM dbo.KYZ_Interval")
+            cursor.execute(
+                """
+                SELECT
+                    MAX(i.IntervalEnd) AS latestIntervalEnd,
+                    (SELECT MAX(l.SampleEnd) FROM dbo.KYZ_Live15s l) AS latestLiveEnd
+                FROM dbo.KYZ_Interval i
+                """
+            )
             row = cursor.fetchone()
             db_connected = True
+            latest_live_end = row.latestLiveEnd if row else None
+            seconds_since_latest_live = None
             if row and row.latestIntervalEnd:
                 latest_interval_end = row.latestIntervalEnd
                 seconds_since_latest = int((server_time - latest_interval_end).total_seconds())
+            if latest_live_end:
+                seconds_since_latest_live = int((server_time - latest_live_end).total_seconds())
     except Exception:
         logger.exception("Health check DB failure")
 
@@ -203,6 +229,8 @@ def get_health() -> dict[str, Any]:
         "dbConnected": db_connected,
         "latestIntervalEnd": latest_interval_end.isoformat() if latest_interval_end else None,
         "secondsSinceLatest": seconds_since_latest,
+        "latestLiveEnd": latest_live_end.isoformat() if latest_live_end else None,
+        "secondsSinceLatestLive": seconds_since_latest_live,
         "credentialMode": credential_mode,
     }
 
@@ -259,6 +287,47 @@ def get_latest() -> dict[str, Any]:
         if row is None:
             raise HTTPException(status_code=404, detail="No interval rows found")
         return row_to_latest(row)
+
+
+@app.get("/api/live/latest")
+def get_live_latest() -> dict[str, Any]:
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT TOP 1 SampleEnd, PulseCount, kWh, kW, Total_kWh
+            FROM dbo.KYZ_Live15s
+            ORDER BY SampleEnd DESC
+            """
+        )
+        row = cursor.fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="No live rows found")
+        return row_to_live_latest(row)
+
+
+@app.get("/api/live/series")
+def get_live_series(minutes: int = 240) -> dict[str, Any]:
+    minutes = max(1, min(minutes, 24 * 60 * 14))
+    end_dt = datetime.now()
+    start_dt = end_dt - timedelta(minutes=minutes)
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT SampleEnd AS t, kW, kWh
+            FROM dbo.KYZ_Live15s
+            WHERE SampleEnd >= ? AND SampleEnd <= ?
+            ORDER BY SampleEnd ASC
+            """,
+            start_dt,
+            end_dt,
+        )
+        rows = cursor.fetchall()
+
+    points = [{"t": row.t.isoformat(), "kW": float(row.kW), "kWh": float(row.kWh)} for row in rows]
+    return {"points": points}
 
 
 @app.get("/api/series")
@@ -371,6 +440,15 @@ def get_summary() -> dict[str, Any]:
 
         cursor.execute(
             """
+            SELECT TOP 1 SampleEnd, kW
+            FROM dbo.KYZ_Live15s
+            ORDER BY SampleEnd DESC
+            """
+        )
+        latest_live = cursor.fetchone()
+
+        cursor.execute(
+            """
             SELECT
                 SUM(CASE WHEN CAST(IntervalEnd AS date)=CAST(GETDATE() AS date) THEN CAST(kWh AS float) ELSE 0 END) AS todayKwh,
                 MAX(CASE WHEN CAST(IntervalEnd AS date)=CAST(GETDATE() AS date) THEN CAST(kW AS float) END) AS todayPeakKw,
@@ -386,6 +464,7 @@ def get_summary() -> dict[str, Any]:
         "plantName": os.getenv("PLANT_NAME", "KYZ Plant"),
         "lastUpdated": totals.lastUpdated.isoformat() if totals and totals.lastUpdated else None,
         "currentKW": float(latest.kW) if latest and latest.kW is not None else None,
+        "currentKW_15s": float(latest_live.kW) if latest_live and latest_live.kW is not None else None,
         "todayKWh": float(totals.todayKwh or 0),
         "todayPeakKW": float(totals.todayPeakKw or 0),
         "mtdKWh": float(totals.mtdKwh or 0),
@@ -484,14 +563,14 @@ def get_billing(months: int = 24) -> dict[str, Any]:
 def build_quality_query() -> str:
     return """
             WITH ordered AS (
-                SELECT k.IntervalEnd AS interval_end,
+                SELECT k.IntervalEnd AS IntervalEnd,
                        LAG(k.IntervalEnd) OVER (ORDER BY k.IntervalEnd) AS prev_end
                 FROM dbo.KYZ_Interval k
                 WHERE k.IntervalEnd >= DATEADD(hour, -24, GETDATE())
             )
             SELECT
-                SUM(CASE WHEN o.prev_end IS NOT NULL AND DATEDIFF(minute, o.prev_end, k.IntervalEnd) > 15
-                    THEN (DATEDIFF(minute, o.prev_end, k.IntervalEnd) / 15) - 1
+                SUM(CASE WHEN o.prev_end IS NOT NULL AND DATEDIFF(minute, o.prev_end, o.IntervalEnd) > 15
+                    THEN (DATEDIFF(minute, o.prev_end, o.IntervalEnd) / 15) - 1
                     ELSE 0 END) AS missing24h,
                 SUM(CASE WHEN k.IntervalEnd >= DATEADD(hour, -24, GETDATE()) AND ISNULL(k.KyzInvalidAlarm,0)=1 THEN 1 ELSE 0 END) AS invalid24h,
                 SUM(CASE WHEN k.IntervalEnd >= DATEADD(day, -7, GETDATE()) AND ISNULL(k.KyzInvalidAlarm,0)=1 THEN 1 ELSE 0 END) AS invalid7d,
@@ -499,7 +578,7 @@ def build_quality_query() -> str:
                 SUM(CASE WHEN k.IntervalEnd >= DATEADD(day, -7, GETDATE()) AND ISNULL(k.R17Exclude,0)=1 THEN 1 ELSE 0 END) AS r177d,
                 SUM(CASE WHEN k.IntervalEnd >= DATEADD(hour, -24, GETDATE()) THEN 1 ELSE 0 END) AS observed24h
             FROM dbo.KYZ_Interval k
-            LEFT JOIN ordered o ON o.interval_end = k.IntervalEnd
+            LEFT JOIN ordered o ON o.IntervalEnd = k.IntervalEnd
             """
 
 

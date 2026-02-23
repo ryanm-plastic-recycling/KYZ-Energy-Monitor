@@ -16,9 +16,6 @@ import pyodbc
 from dotenv import load_dotenv
 
 
-TOPIC = "pri/energy/kyz/interval"
-
-
 class ConfigError(Exception):
     """Raised when required configuration is missing."""
 
@@ -157,68 +154,40 @@ def _parse_int_field(payload: dict[str, Any], *field_names: str, required: bool 
     return None
 
 
-def parse_minimal_kv_payload(raw_payload: str) -> tuple[int, int | None]:
+def parse_packed_pulse_payload(raw_payload: str) -> tuple[int, int | None]:
     tokens = [part.strip() for part in raw_payload.split(",") if part.strip()]
     if not tokens:
         raise ValueError("Empty key/value payload")
 
     parsed: dict[str, str] = {}
-    for index, token in enumerate(tokens):
-        if "=" in token:
-            key, value = token.split("=", 1)
-            parsed[key.strip()] = value.strip()
-            continue
-
-        if index == 1 and "d" in parsed and token.lstrip("-").isdigit():
-            parsed["t"] = token
-            continue
-
-        raise ValueError("Unsupported key/value payload format")
+    for token in tokens:
+        if "=" not in token:
+            raise ValueError("Unsupported key/value payload format")
+        key, value = token.split("=", 1)
+        parsed[key.strip()] = value.strip()
 
     delta = _parse_int_field(parsed, "d", "pulseDelta")
-    total = _parse_int_field(parsed, "t", "pulseTotal", required=False)
+    total = _parse_int_field(parsed, "c", "pulseTotal", "t", required=False)
     return delta, total
 
 
-def derive_interval_end(now: datetime, interval_minutes: int, grace_seconds: int) -> datetime:
-    interval_seconds = interval_minutes * 60
-    midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    elapsed = int((now - midnight).total_seconds())
-    floor_elapsed = (elapsed // interval_seconds) * interval_seconds
-    floor_boundary = midnight + timedelta(seconds=floor_elapsed)
-    delta_from_floor = elapsed - floor_elapsed
-    if delta_from_floor <= grace_seconds:
-        return floor_boundary
-    return floor_boundary + timedelta(seconds=interval_seconds)
+def bucket_end(timestamp: datetime, bucket_seconds: int) -> datetime:
+    epoch_seconds = int(timestamp.timestamp())
+    if epoch_seconds % bucket_seconds == 0:
+        aligned = epoch_seconds
+    else:
+        aligned = ((epoch_seconds // bucket_seconds) + 1) * bucket_seconds
+    return datetime.fromtimestamp(aligned)
 
 
-def build_interval_from_minimal(
-    pulse_delta: int,
-    pulse_total: int | None,
-    pulses_per_kwh: float,
-    interval_minutes: int,
-    grace_seconds: int,
-) -> dict[str, Any]:
-    if pulses_per_kwh <= 0:
-        raise ConfigError("KYZ_PULSES_PER_KWH must be greater than zero")
-    if interval_minutes <= 0:
-        raise ConfigError("KYZ_INTERVAL_MINUTES must be greater than zero")
-    if grace_seconds < 0:
-        raise ConfigError("KYZ_INTERVAL_GRACE_SECONDS must be zero or greater")
-
-    interval_end = derive_interval_end(datetime.now(), interval_minutes, grace_seconds)
-    kwh = pulse_delta / pulses_per_kwh
-    kw = kwh * (60.0 / interval_minutes)
-    total_kwh = (pulse_total / pulses_per_kwh) if pulse_total is not None else None
-
+def compute_energy_metrics(pulse_count: int, pulses_per_kwh: float, bucket_seconds: int, pulse_total: int | None) -> dict[str, Any]:
+    kwh = pulse_count / pulses_per_kwh
+    kw = kwh * (3600.0 / bucket_seconds)
     return {
-        "intervalEnd": interval_end,
-        "pulseCount": pulse_delta,
+        "pulseCount": pulse_count,
         "kWh": float(kwh),
         "kW": float(kw),
-        "total_kWh": float(total_kwh) if total_kwh is not None else None,
-        "r17Exclude": None,
-        "kyzInvalidAlarm": None,
+        "total_kWh": float(pulse_total / pulses_per_kwh) if pulse_total is not None else None,
     }
 
 
@@ -277,7 +246,37 @@ class IntervalIngestor:
             self.conn.close()
             self.conn = None
 
-    def insert_interval(self, data: dict[str, Any]) -> None:
+    def _execute_with_retry(self, sql: str, params: tuple[Any, ...], dedupe_key: datetime, label: str) -> bool:
+        with self.lock:
+            for attempt in range(1, 4):
+                conn = self._ensure_connection()
+                cursor = conn.cursor()
+                try:
+                    cursor.execute(sql, params)
+                    inserted = cursor.rowcount
+                    conn.commit()
+                    return inserted > 0
+                except pyodbc.Error as exc:
+                    conn.rollback()
+                    if is_transient_sql_error(exc) and attempt < 3:
+                        self.logger.warning(
+                            "Transient SQL write failure for %s=%s (attempt %s). Reconnecting.",
+                            label,
+                            dedupe_key,
+                            attempt,
+                        )
+                        try:
+                            conn.close()
+                        except Exception:
+                            pass
+                        self.conn = None
+                        time.sleep(attempt)
+                        continue
+                    raise
+                finally:
+                    cursor.close()
+
+    def insert_interval(self, data: dict[str, Any]) -> bool:
         sql = """
             INSERT INTO dbo.KYZ_Interval (
                 IntervalEnd,
@@ -295,49 +294,43 @@ class IntervalIngestor:
                 WHERE IntervalEnd = ?
             )
         """
-
         params = (
             data["intervalEnd"],
             data["pulseCount"],
             data["kWh"],
             data["kW"],
             data["total_kWh"],
-            None if data["r17Exclude"] is None else (1 if data["r17Exclude"] else 0),
-            None if data["kyzInvalidAlarm"] is None else (1 if data["kyzInvalidAlarm"] else 0),
+            None if data.get("r17Exclude") is None else (1 if data["r17Exclude"] else 0),
+            None if data.get("kyzInvalidAlarm") is None else (1 if data["kyzInvalidAlarm"] else 0),
             data["intervalEnd"],
         )
+        return self._execute_with_retry(sql, params, data["intervalEnd"], "intervalEnd")
 
-        with self.lock:
-            for attempt in range(1, 4):
-                conn = self._ensure_connection()
-                cursor = conn.cursor()
-                try:
-                    cursor.execute(sql, params)
-                    inserted = cursor.rowcount
-                    conn.commit()
-                    if inserted == 0:
-                        self.logger.info("Skipped duplicate intervalEnd=%s", data["intervalEnd"])
-                    else:
-                        self.logger.info("Inserted intervalEnd=%s", data["intervalEnd"])
-                    return
-                except pyodbc.Error as exc:
-                    conn.rollback()
-                    if is_transient_sql_error(exc) and attempt < 3:
-                        self.logger.warning(
-                            "Transient SQL write failure for intervalEnd=%s (attempt %s). Reconnecting.",
-                            data["intervalEnd"],
-                            attempt,
-                        )
-                        try:
-                            conn.close()
-                        except Exception:
-                            pass
-                        self.conn = None
-                        time.sleep(attempt)
-                        continue
-                    raise
-                finally:
-                    cursor.close()
+    def insert_live(self, data: dict[str, Any]) -> bool:
+        sql = """
+            INSERT INTO dbo.KYZ_Live15s (
+                SampleEnd,
+                PulseCount,
+                kWh,
+                kW,
+                Total_kWh
+            )
+            SELECT ?, ?, ?, ?, ?
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM dbo.KYZ_Live15s WITH (UPDLOCK, HOLDLOCK)
+                WHERE SampleEnd = ?
+            )
+        """
+        params = (
+            data["sampleEnd"],
+            data["pulseCount"],
+            data["kWh"],
+            data["kW"],
+            data["total_kWh"],
+            data["sampleEnd"],
+        )
+        return self._execute_with_retry(sql, params, data["sampleEnd"], "sampleEnd")
 
 
 class MqttSqlService:
@@ -352,8 +345,20 @@ class MqttSqlService:
         self.mqtt_password = os.getenv("MQTT_PASSWORD")
         self.mqtt_client_id = os.getenv("MQTT_CLIENT_ID", "kyz-sql-ingestor")
         self.mqtt_keepalive = int(os.getenv("MQTT_KEEPALIVE", "60"))
-        self.kyz_interval_minutes = get_env_int("KYZ_INTERVAL_MINUTES", default=15)
-        self.kyz_interval_grace_seconds = get_env_int("KYZ_INTERVAL_GRACE_SECONDS", default=30)
+
+        self.topic_pulse = os.getenv("MQTT_TOPIC_PULSE", "pri/energy/kyz/pulseCount")
+        self.topic_interval = os.getenv("MQTT_TOPIC_INTERVAL", "pri/energy/kyz/interval")
+        self.live_window_seconds = get_env_int("LIVE_WINDOW_SECONDS", default=15)
+        self.interval_seconds = get_env_int("INTERVAL_SECONDS", default=900)
+        self.pulses_per_kwh = get_env_float("KYZ_PULSES_PER_KWH")
+        if self.pulses_per_kwh <= 0:
+            raise ConfigError("KYZ_PULSES_PER_KWH must be greater than zero")
+
+        self.live_buckets: dict[datetime, int] = {}
+        self.interval_buckets: dict[datetime, int] = {}
+        self.last_total_pulses: int | None = None
+        self.last_total_kwh: float | None = None
+        self.last_finalize_log: dict[str, float] = {"live": 0.0, "interval": 0.0}
 
         self.client = mqtt.Client(
             mqtt.CallbackAPIVersion.VERSION2,
@@ -372,17 +377,95 @@ class MqttSqlService:
     def on_connect(self, client: mqtt.Client, userdata: Any, flags: Any, reason_code: Any, properties: Any = None) -> None:
         if reason_code == 0:
             self.logger.info("Connected to MQTT broker at %s:%s", self.mqtt_host, self.mqtt_port)
-            client.subscribe(TOPIC, qos=1)
-            self.logger.info("Subscribed to topic %s", TOPIC)
+            topics = {self.topic_pulse, self.topic_interval}
+            for topic in topics:
+                client.subscribe(topic, qos=1)
+                self.logger.info("Subscribed to topic %s", topic)
         else:
             self.logger.error("Failed MQTT connect with reason code: %s", reason_code)
 
     def on_disconnect(self, client: mqtt.Client, userdata: Any, disconnect_flags: Any, reason_code: Any, properties: Any = None) -> None:
         self.logger.warning("MQTT disconnected (reason=%s)", reason_code)
 
+    def _rate_limited_bucket_log(self, key: str, message: str, *args: Any) -> None:
+        now_monotonic = time.monotonic()
+        if now_monotonic - self.last_finalize_log[key] >= 5:
+            self.logger.info(message, *args)
+            self.last_finalize_log[key] = now_monotonic
+
+    def _queue_bucket(self, receive_time: datetime, pulse_delta: int, pulse_total: int | None) -> None:
+        live_end = bucket_end(receive_time, self.live_window_seconds)
+        interval_end = bucket_end(receive_time, self.interval_seconds)
+        self.live_buckets[live_end] = self.live_buckets.get(live_end, 0) + pulse_delta
+        self.interval_buckets[interval_end] = self.interval_buckets.get(interval_end, 0) + pulse_delta
+
+        if pulse_total is not None:
+            self.last_total_kwh = pulse_total / self.pulses_per_kwh
+
+    def _flush_closed_buckets(self, now: datetime) -> None:
+        closed_live = sorted(end for end in self.live_buckets if end <= now)
+        for sample_end in closed_live:
+            pulse_count = self.live_buckets.pop(sample_end)
+            metrics = compute_energy_metrics(pulse_count, self.pulses_per_kwh, self.live_window_seconds, None)
+            payload = {"sampleEnd": sample_end, **metrics, "total_kWh": self.last_total_kwh}
+            inserted = self.ingestor.insert_live(payload)
+            if inserted:
+                self._rate_limited_bucket_log(
+                    "live",
+                    "Finalized live bucket sampleEnd=%s pulseCount=%s kW=%.3f",
+                    sample_end,
+                    pulse_count,
+                    payload["kW"],
+                )
+
+        closed_interval = sorted(end for end in self.interval_buckets if end <= now)
+        for interval_end in closed_interval:
+            pulse_count = self.interval_buckets.pop(interval_end)
+            metrics = compute_energy_metrics(pulse_count, self.pulses_per_kwh, self.interval_seconds, None)
+            payload = {
+                "intervalEnd": interval_end,
+                "pulseCount": metrics["pulseCount"],
+                "kWh": metrics["kWh"],
+                "kW": metrics["kW"],
+                "total_kWh": self.last_total_kwh,
+                "r17Exclude": None,
+                "kyzInvalidAlarm": None,
+            }
+            inserted = self.ingestor.insert_interval(payload)
+            if inserted:
+                self._rate_limited_bucket_log(
+                    "interval",
+                    "Finalized interval bucket intervalEnd=%s pulseCount=%s kW=%.3f",
+                    interval_end,
+                    pulse_count,
+                    payload["kW"],
+                )
+
+    def _process_packed_payload(self, raw_payload: str, topic: str, receive_time: datetime) -> None:
+        pulse_delta, pulse_total = parse_packed_pulse_payload(raw_payload)
+        if pulse_total is not None:
+            if self.last_total_pulses is not None and pulse_total == self.last_total_pulses:
+                self.logger.warning("Duplicate packed payload ignored on topic %s total=%s", topic, pulse_total)
+                return
+            if self.last_total_pulses is not None and pulse_total < self.last_total_pulses:
+                self.logger.warning(
+                    "Pulse total decreased on topic %s (prev=%s new=%s). Treating as PLC reset.",
+                    topic,
+                    self.last_total_pulses,
+                    pulse_total,
+                )
+            self.last_total_pulses = pulse_total
+        else:
+            self.logger.warning("Packed payload missing total pulse counter on topic %s; dedupe unavailable", topic)
+
+        self._queue_bucket(receive_time, pulse_delta, pulse_total)
+        self._flush_closed_buckets(receive_time)
+
     def on_message(self, client: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage) -> None:
         raw_payload = msg.payload.decode("utf-8", errors="replace")
         payload_preview = raw_payload[:300]
+        receive_time = datetime.now()
+
         try:
             payload = json.loads(raw_payload)
             if not isinstance(payload, dict):
@@ -390,42 +473,27 @@ class MqttSqlService:
 
             if all(field in payload for field in ["intervalEnd", "pulseCount", "kWh", "kW"]):
                 data = validate_payload(payload)
-            else:
+                inserted = self.ingestor.insert_interval(data)
+                if inserted:
+                    self._rate_limited_bucket_log("interval", "Inserted JSON interval intervalEnd=%s", data["intervalEnd"])
+                return
+
+            if any(field in payload for field in ["d", "pulseDelta", "c", "pulseTotal", "t"]):
                 pulse_delta = _parse_int_field(payload, "d", "pulseDelta")
-                pulse_total = _parse_int_field(payload, "t", "pulseTotal", required=False)
-                pulses_per_kwh = get_env_float("KYZ_PULSES_PER_KWH")
-                data = build_interval_from_minimal(
-                    pulse_delta,
-                    pulse_total,
-                    pulses_per_kwh,
-                    self.kyz_interval_minutes,
-                    self.kyz_interval_grace_seconds,
-                )
-            self.ingestor.insert_interval(data)
+                pulse_total = _parse_int_field(payload, "c", "pulseTotal", "t", required=False)
+                packed_raw = f"d={pulse_delta}" + (f",c={pulse_total}" if pulse_total is not None else "")
+                self._process_packed_payload(packed_raw, msg.topic, receive_time)
+                return
+
+            raise ValueError("Unsupported JSON payload shape")
+
         except json.JSONDecodeError:
             try:
-                pulse_delta, pulse_total = parse_minimal_kv_payload(raw_payload)
-                pulses_per_kwh = get_env_float("KYZ_PULSES_PER_KWH")
-                data = build_interval_from_minimal(
-                    pulse_delta,
-                    pulse_total,
-                    pulses_per_kwh,
-                    self.kyz_interval_minutes,
-                    self.kyz_interval_grace_seconds,
-                )
-                self.ingestor.insert_interval(data)
+                self._process_packed_payload(raw_payload, msg.topic, receive_time)
             except Exception:
-                self.logger.exception(
-                    "Invalid MQTT payload on topic %s raw=%r",
-                    msg.topic,
-                    payload_preview,
-                )
-        except Exception:
-            self.logger.exception(
-                "Failed to process MQTT payload on topic %s raw=%r",
-                msg.topic,
-                payload_preview,
-            )
+                self.logger.warning("Invalid packed payload on topic %s raw=%r", msg.topic, payload_preview)
+        except Exception as exc:
+            self.logger.warning("Failed to process MQTT payload on topic %s: %s raw=%r", msg.topic, exc, payload_preview)
 
     def _connect_mqtt_with_backoff(self) -> None:
         delay = 1
@@ -444,6 +512,7 @@ class MqttSqlService:
         self.client.loop_start()
 
         while not self.stop_event.is_set():
+            self._flush_closed_buckets(datetime.now())
             time.sleep(0.2)
 
         self.client.loop_stop()
@@ -551,8 +620,8 @@ def main() -> int:
 
         service.run()
         return 0
-    except ConfigError:
-        logger.exception("Configuration error")
+    except ConfigError as exc:
+        logger.warning("Configuration error: %s", exc)
         return 2
     except Exception:
         logger.exception("Fatal error")
