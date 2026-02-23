@@ -8,17 +8,34 @@ export type LatestRow = {
   KyzInvalidAlarm: boolean | null
 }
 
+export type LiveLatestRow = {
+  SampleEnd: string
+  kW: number | null
+  kWh: number | null
+  PulseCount: number | null
+  Total_kWh: number | null
+}
+
+export type LiveSeriesPoint = {
+  t: string
+  kW: number
+  kWh: number
+}
+
 export type Health = {
   serverTime: string
   dbConnected: boolean
   latestIntervalEnd: string | null
   secondsSinceLatest: number | null
+  latestLiveEnd: string | null
+  secondsSinceLatestLive: number | null
 }
 
 export type Summary = {
   plantName: string
   lastUpdated: string | null
   currentKW: number | null
+  currentKW_15s: number | null
   todayKWh: number
   todayPeakKW: number
   mtdKWh: number
