@@ -7,7 +7,7 @@ import signal
 import sys
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -73,6 +73,30 @@ def get_sql_connection_string() -> str:
     )
 
 
+def get_env_int(name: str, default: int | None = None) -> int:
+    raw = os.getenv(name)
+    if raw in (None, ""):
+        if default is None:
+            raise ConfigError(f"Missing required environment variable: {name}")
+        return default
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise ConfigError(f"Invalid integer for {name}: {raw}") from exc
+
+
+def get_env_float(name: str, default: float | None = None) -> float:
+    raw = os.getenv(name)
+    if raw in (None, ""):
+        if default is None:
+            raise ConfigError(f"Missing required environment variable: {name}")
+        return default
+    try:
+        return float(raw)
+    except ValueError as exc:
+        raise ConfigError(f"Invalid float for {name}: {raw}") from exc
+
+
 def parse_interval_end(value: Any) -> datetime:
     if not isinstance(value, str):
         raise ValueError("intervalEnd must be a string in format YYYY-MM-DD HH:MM:SS")
@@ -114,6 +138,87 @@ def validate_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "total_kWh": float(total_kwh) if total_kwh is not None else None,
         "r17Exclude": r17_exclude,
         "kyzInvalidAlarm": kyz_invalid_alarm,
+    }
+
+
+def _parse_int_field(payload: dict[str, Any], *field_names: str, required: bool = True) -> int | None:
+    for name in field_names:
+        if name in payload:
+            value = payload[name]
+            if isinstance(value, bool):
+                raise ValueError(f"{name} must be an integer")
+            if isinstance(value, int):
+                return value
+            if isinstance(value, str) and value.strip() and value.strip().lstrip("-").isdigit():
+                return int(value.strip())
+            raise ValueError(f"{name} must be an integer")
+    if required:
+        raise ValueError(f"Missing required payload field: {field_names[0]}")
+    return None
+
+
+def parse_minimal_kv_payload(raw_payload: str) -> tuple[int, int | None]:
+    tokens = [part.strip() for part in raw_payload.split(",") if part.strip()]
+    if not tokens:
+        raise ValueError("Empty key/value payload")
+
+    parsed: dict[str, str] = {}
+    for index, token in enumerate(tokens):
+        if "=" in token:
+            key, value = token.split("=", 1)
+            parsed[key.strip()] = value.strip()
+            continue
+
+        if index == 1 and "d" in parsed and token.lstrip("-").isdigit():
+            parsed["t"] = token
+            continue
+
+        raise ValueError("Unsupported key/value payload format")
+
+    delta = _parse_int_field(parsed, "d", "pulseDelta")
+    total = _parse_int_field(parsed, "t", "pulseTotal", required=False)
+    return delta, total
+
+
+def derive_interval_end(now: datetime, interval_minutes: int, grace_seconds: int) -> datetime:
+    interval_seconds = interval_minutes * 60
+    midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    elapsed = int((now - midnight).total_seconds())
+    floor_elapsed = (elapsed // interval_seconds) * interval_seconds
+    floor_boundary = midnight + timedelta(seconds=floor_elapsed)
+    delta_from_floor = elapsed - floor_elapsed
+    if delta_from_floor <= grace_seconds:
+        return floor_boundary
+    return floor_boundary + timedelta(seconds=interval_seconds)
+
+
+def build_interval_from_minimal(
+    pulse_delta: int,
+    pulse_total: int | None,
+    pulses_per_kwh: float,
+    interval_minutes: int,
+    grace_seconds: int,
+) -> dict[str, Any]:
+    if pulses_per_kwh <= 0:
+        raise ConfigError("KYZ_PULSES_PER_KWH must be greater than zero")
+    if interval_minutes <= 0:
+        raise ConfigError("KYZ_INTERVAL_MINUTES must be greater than zero")
+    if grace_seconds < 0:
+        raise ConfigError("KYZ_INTERVAL_GRACE_SECONDS must be zero or greater")
+
+    interval_end = derive_interval_end(datetime.now(), interval_minutes, grace_seconds)
+    kwh = pulse_delta / pulses_per_kwh
+    kw = kwh * (60.0 / interval_minutes)
+    total_kwh = (pulse_total / pulses_per_kwh) if pulse_total is not None else None
+
+    return {
+        "intervalEnd": interval_end,
+        "pulseCount": pulse_delta,
+        "kWh": float(kwh),
+        "kW": float(kw),
+        "total_kWh": float(total_kwh) if total_kwh is not None else None,
+        "r17Exclude": None,
+        "kyzInvalidAlarm": None,
     }
 
 
@@ -247,6 +352,8 @@ class MqttSqlService:
         self.mqtt_password = os.getenv("MQTT_PASSWORD")
         self.mqtt_client_id = os.getenv("MQTT_CLIENT_ID", "kyz-sql-ingestor")
         self.mqtt_keepalive = int(os.getenv("MQTT_KEEPALIVE", "60"))
+        self.kyz_interval_minutes = get_env_int("KYZ_INTERVAL_MINUTES", default=15)
+        self.kyz_interval_grace_seconds = get_env_int("KYZ_INTERVAL_GRACE_SECONDS", default=30)
 
         self.client = mqtt.Client(
             mqtt.CallbackAPIVersion.VERSION2,
@@ -274,14 +381,51 @@ class MqttSqlService:
         self.logger.warning("MQTT disconnected (reason=%s)", reason_code)
 
     def on_message(self, client: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage) -> None:
+        raw_payload = msg.payload.decode("utf-8", errors="replace")
+        payload_preview = raw_payload[:300]
         try:
-            payload = json.loads(msg.payload.decode("utf-8"))
-            data = validate_payload(payload)
+            payload = json.loads(raw_payload)
+            if not isinstance(payload, dict):
+                raise ValueError("JSON payload must be an object")
+
+            if all(field in payload for field in ["intervalEnd", "pulseCount", "kWh", "kW"]):
+                data = validate_payload(payload)
+            else:
+                pulse_delta = _parse_int_field(payload, "d", "pulseDelta")
+                pulse_total = _parse_int_field(payload, "t", "pulseTotal", required=False)
+                pulses_per_kwh = get_env_float("KYZ_PULSES_PER_KWH")
+                data = build_interval_from_minimal(
+                    pulse_delta,
+                    pulse_total,
+                    pulses_per_kwh,
+                    self.kyz_interval_minutes,
+                    self.kyz_interval_grace_seconds,
+                )
             self.ingestor.insert_interval(data)
         except json.JSONDecodeError:
-            self.logger.exception("Invalid JSON payload on topic %s", msg.topic)
+            try:
+                pulse_delta, pulse_total = parse_minimal_kv_payload(raw_payload)
+                pulses_per_kwh = get_env_float("KYZ_PULSES_PER_KWH")
+                data = build_interval_from_minimal(
+                    pulse_delta,
+                    pulse_total,
+                    pulses_per_kwh,
+                    self.kyz_interval_minutes,
+                    self.kyz_interval_grace_seconds,
+                )
+                self.ingestor.insert_interval(data)
+            except Exception:
+                self.logger.exception(
+                    "Invalid MQTT payload on topic %s raw=%r",
+                    msg.topic,
+                    payload_preview,
+                )
         except Exception:
-            self.logger.exception("Failed to process MQTT payload on topic %s", msg.topic)
+            self.logger.exception(
+                "Failed to process MQTT payload on topic %s raw=%r",
+                msg.topic,
+                payload_preview,
+            )
 
     def _connect_mqtt_with_backoff(self) -> None:
         delay = 1

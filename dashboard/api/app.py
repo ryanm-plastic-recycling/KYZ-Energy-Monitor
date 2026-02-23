@@ -484,7 +484,7 @@ def get_billing(months: int = 24) -> dict[str, Any]:
 def build_quality_query() -> str:
     return """
             WITH ordered AS (
-                SELECT k.IntervalEnd,
+                SELECT k.IntervalEnd AS interval_end,
                        LAG(k.IntervalEnd) OVER (ORDER BY k.IntervalEnd) AS prev_end
                 FROM dbo.KYZ_Interval k
                 WHERE k.IntervalEnd >= DATEADD(hour, -24, GETDATE())
@@ -499,7 +499,7 @@ def build_quality_query() -> str:
                 SUM(CASE WHEN k.IntervalEnd >= DATEADD(day, -7, GETDATE()) AND ISNULL(k.R17Exclude,0)=1 THEN 1 ELSE 0 END) AS r177d,
                 SUM(CASE WHEN k.IntervalEnd >= DATEADD(hour, -24, GETDATE()) THEN 1 ELSE 0 END) AS observed24h
             FROM dbo.KYZ_Interval k
-            LEFT JOIN ordered o ON o.IntervalEnd = k.IntervalEnd
+            LEFT JOIN ordered o ON o.interval_end = k.IntervalEnd
             """
 
 
