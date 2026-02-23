@@ -39,10 +39,24 @@ Use created username/password in `.env`:
 
 ## Connectivity tests
 
-Publish test message:
+Publish test messages:
+
+Full JSON:
 
 ```powershell
 mosquitto_pub -h <broker> -p 1883 -u <user> -P <pass> -t pri/energy/kyz/interval -m "{\"intervalEnd\":\"2026-01-31 14:15:00\",\"pulseCount\":1,\"kWh\":0.25,\"kW\":1.00}"
+```
+
+Minimal JSON (PLC-friendly):
+
+```powershell
+mosquitto_pub -h <broker> -p 1883 -u <user> -P <pass> -t pri/energy/kyz/interval -m "{\"d\":42,\"t\":1234567}"
+```
+
+Minimal key/value string:
+
+```powershell
+mosquitto_pub -h <broker> -p 1883 -u <user> -P <pass> -t pri/energy/kyz/interval -m "d=42,t=1234567"
 ```
 
 Ingestor-side test:
@@ -59,3 +73,17 @@ cd C:\apps\kyz-energy-monitor
 - Restrict inbound firewall to plant network only
 - Prefer TLS (`8883`) if certificates are available
 - Back up `mosquitto.conf`, password file, and broker logs
+
+## PLC PACK STRING example
+
+Example PLC string build target for minimal JSON:
+
+```text
+{"d":42,"t":1234567}
+```
+
+Set these `.env` variables on the ingestor host when using minimal payload mode:
+
+- `KYZ_PULSES_PER_KWH` (required)
+- `KYZ_INTERVAL_MINUTES` (default `15`)
+- `KYZ_INTERVAL_GRACE_SECONDS` (default `30`)

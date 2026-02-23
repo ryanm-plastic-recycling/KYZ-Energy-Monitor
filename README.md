@@ -2,6 +2,45 @@
 
 Python **3.13** service that subscribes to MQTT topic `pri/energy/kyz/interval` and inserts interval rows into `dbo.KYZ_Interval` in Azure SQL. Supports **Windows 11 x64** deployment.
 
+
+## MQTT payload formats
+
+The ingestor accepts `pri/energy/kyz/interval` in either full or minimal format:
+
+1. Full JSON (backward compatible):
+
+```json
+{"intervalEnd":"YYYY-MM-DD HH:MM:SS","pulseCount":42,"kWh":0.42,"kW":1.68,"total_kWh":1234.5,"r17Exclude":false,"kyzInvalidAlarm":false}
+```
+
+2. Minimal PLC-friendly formats (server computes interval and power):
+
+- Minimal JSON:
+
+```json
+{"d":42,"t":1234567}
+```
+
+Also accepted:
+
+```json
+{"pulseDelta":42,"pulseTotal":1234567}
+```
+
+- Key/value string:
+
+```text
+d=42,t=1234567
+```
+
+Legacy variant also accepted:
+
+```text
+d=42,1234567
+```
+
+When minimal payloads are used, the ingestor computes `intervalEnd`, `kWh`, `kW`, and optional `total_kWh` from server time and KYZ scaling settings.
+
 ## Architecture
 
 - MQTT ingestor (`main.py`) writes idempotent intervals into `dbo.KYZ_Interval`.
@@ -81,6 +120,16 @@ Recommended SQL users/permissions:
 
 The dashboard health endpoint (`/api/health`) reports `credentialMode` as `"ro"` or `"rw"` and never returns usernames or passwords.
 
+## KYZ minimal payload env settings
+
+For minimal payload mode, configure:
+
+- `KYZ_PULSES_PER_KWH` (**required** for minimal payloads)
+- `KYZ_INTERVAL_MINUTES` (default `15`)
+- `KYZ_INTERVAL_GRACE_SECONDS` (default `30`)
+
+`intervalEnd` is aligned by server clock to interval boundaries with grace handling near boundary crossings.
+
 ## Dashboard tariff/env settings
 
 Optional `.env` settings used by dashboard billing calculations:
@@ -106,3 +155,4 @@ Automation scripts (retained):
 - `scripts/windows/install_dashboard.ps1`
 - `scripts/windows/create_taskscheduler_jobs.ps1`
 - `scripts/windows/smoke_test.ps1`
+- `scripts/windows/mqtt_probe.py`
