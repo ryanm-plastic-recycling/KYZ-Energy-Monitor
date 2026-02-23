@@ -67,6 +67,20 @@ Open:
 - `http://localhost:8080/`
 - `http://localhost:8080/kiosk?refresh=10&theme=dark`
 
+## SQL credential model (ingestor vs dashboard)
+
+- Ingestor (`main.py`) behavior is unchanged and continues to use `SQL_USERNAME` / `SQL_PASSWORD`.
+- Dashboard API (`dashboard/api`) credential lookup order is:
+  1. `SQL_RO_USERNAME` / `SQL_RO_PASSWORD` if both are set
+  2. else `SQL_USERNAME` / `SQL_PASSWORD`
+
+Recommended SQL users/permissions:
+
+- `kyz_ingestor`: `INSERT` on `dbo.KYZ_Interval` (optional `SELECT` for diagnostics)
+- `kyz_dashboard`: `SELECT` only on `dbo.KYZ_Interval` plus dashboard views
+
+The dashboard health endpoint (`/api/health`) reports `credentialMode` as `"ro"` or `"rw"` and never returns usernames or passwords.
+
 ## Dashboard tariff/env settings
 
 Optional `.env` settings used by dashboard billing calculations:
