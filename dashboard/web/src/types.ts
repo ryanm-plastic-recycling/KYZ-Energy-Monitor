@@ -22,6 +22,12 @@ export type LiveSeriesPoint = {
   kWh: number
 }
 
+export type IntervalSeriesPoint = {
+  t: string
+  kW: number
+  kWh: number
+}
+
 export type Health = {
   serverTime: string
   dbConnected: boolean
