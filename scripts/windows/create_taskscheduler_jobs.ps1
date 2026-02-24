@@ -31,17 +31,16 @@ $pyIngestor  = Join-Path $RepoRoot ".venv\Scripts\python.exe"
 $pyDashApi   = Join-Path $RepoRoot "dashboard\api\.venv\Scripts\python.exe"
 $purgeScript = Join-Path $RepoRoot "scripts\windows\purge_live15s.py"
 
-if (-not (Test-Path $pyIngestor)) { throw "Missing: $pyIngestor (run install_ingestor.ps1 first)" }
-if (-not (Test-Path $pyDashApi))  { throw "Missing: $pyDashApi (run install_dashboard.ps1 first)" }
+if (-not (Test-Path $pyIngestor))  { throw "Missing: $pyIngestor (run install_ingestor.ps1 first)" }
+if (-not (Test-Path $pyDashApi))   { throw "Missing: $pyDashApi (run install_dashboard.ps1 first)" }
 if (-not (Test-Path $purgeScript)) { throw "Missing: $purgeScript" }
 
-# Principal (SYSTEM only, by design)
 if ($TaskUser.ToUpper() -ne "SYSTEM") {
     throw "This script currently supports TaskUser=SYSTEM only (no password handling)."
 }
 $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
 
-# Settings: do NOT stop after 72 hours; restart on failure
+# Disable task execution time limits so long-running services are not stopped.
 $settingsLongRun = New-ScheduledTaskSettingsSet `
     -ExecutionTimeLimit ([TimeSpan]::Zero) `
     -RestartCount 3 `
@@ -50,32 +49,40 @@ $settingsLongRun = New-ScheduledTaskSettingsSet `
     -MultipleInstances IgnoreNew
 
 $settingsShortRun = New-ScheduledTaskSettingsSet `
-    -ExecutionTimeLimit (New-TimeSpan -Minutes 30) `
+    -ExecutionTimeLimit ([TimeSpan]::Zero) `
     -RestartCount 1 `
     -RestartInterval (New-TimeSpan -Minutes 5) `
     -StartWhenAvailable `
     -MultipleInstances IgnoreNew
 
-# Actions
+function Quote-Arg {
+    param([Parameter(Mandatory=$true)][string]$Value)
+    if ($Value.Contains('"')) {
+        $Value = $Value.Replace('"', '\"')
+    }
+    return '"{0}"' -f $Value
+}
+
+$ingestorArgs = Quote-Arg (Join-Path $RepoRoot "main.py")
+$dashboardArgs = "-m uvicorn dashboard.api.app:app --host 0.0.0.0 --port 8080"
+$retentionArgs = "{0} --retention-days {1}" -f (Quote-Arg $purgeScript), $RetentionDays
+
 $ingestorAction = New-ScheduledTaskAction `
     -Execute $pyIngestor `
-    -Argument "main.py" `
+    -Argument $ingestorArgs `
     -WorkingDirectory $RepoRoot
 
 $dashboardAction = New-ScheduledTaskAction `
     -Execute $pyDashApi `
-    -Argument "-m uvicorn dashboard.api.app:app --host 0.0.0.0 --port 8080" `
+    -Argument $dashboardArgs `
     -WorkingDirectory $RepoRoot
 
 $retentionAction = New-ScheduledTaskAction `
     -Execute $pyIngestor `
-    -Argument ("{0} --retention-days {1}" -f $purgeScript, $RetentionDays) `
+    -Argument $retentionArgs `
     -WorkingDirectory $RepoRoot
 
-# Triggers
 $startupTrigger = New-ScheduledTaskTrigger -AtStartup
-
-# Parse retention time (today's date with that time; scheduler only uses the time portion)
 $retTime = Get-Date $RetentionTime
 $dailyTrigger = New-ScheduledTaskTrigger -Daily -At $retTime
 

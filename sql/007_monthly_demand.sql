@@ -4,7 +4,6 @@
    - Snapshot table + proc for billed demand (ratchet + min 50)
    ========================================================= */
 
--- ---------- Option A: raw monthly stats ----------
 CREATE OR ALTER VIEW dbo.v_KYZ_MonthlyDemandRaw AS
 WITH base AS (
     SELECT
@@ -33,8 +32,6 @@ FROM ranked
 GROUP BY MonthStart;
 GO
 
-
--- ---------- Option B: snapshot billed demand (ratchet-aware) ----------
 IF OBJECT_ID('dbo.KYZ_MonthlyDemand', 'U') IS NULL
 BEGIN
     CREATE TABLE dbo.KYZ_MonthlyDemand
@@ -43,14 +40,11 @@ BEGIN
         Top3Avg_kW               float        NOT NULL,
         Peak_kW                  float        NOT NULL,
         Energy_kWh               float        NOT NULL,
-
         HighestPrev11_Billed_kW  float        NOT NULL,
         RatchetFloor_kW          float        NOT NULL,
         Billed_kW                float        NOT NULL,
-
         ComputedAtUtc            datetime2(3) NOT NULL
             CONSTRAINT DF_KYZ_MonthlyDemand_ComputedAtUtc DEFAULT SYSUTCDATETIME(),
-
         CONSTRAINT PK_KYZ_MonthlyDemand PRIMARY KEY CLUSTERED (MonthStart)
     );
 END;
@@ -83,7 +77,6 @@ BEGIN
     FROM MonthList
     OPTION (MAXRECURSION 32767);
 
-    -- Raw per month (0-filled if no data)
     SELECT
         m.MonthStart,
         COALESCE(r.Top3Avg_kW, 0.0) AS Top3Avg_kW,
@@ -129,7 +122,6 @@ BEGIN
 
         DECLARE @ratchetFloor float = 0.60 * @highestPrev11;
 
-        -- billed = max(top3, ratchetFloor, 50)
         DECLARE @billed float =
             (SELECT MAX(v) FROM (VALUES (@top3), (@ratchetFloor), (50.0)) AS x(v));
 
@@ -175,10 +167,10 @@ FROM dbo.KYZ_MonthlyDemand
 ORDER BY MonthStart DESC;
 GO
 
--- Grants (adjust users if yours differ)
 GRANT SELECT ON dbo.v_KYZ_MonthlyDemandRaw     TO kyz_dashboard;
 GRANT SELECT ON dbo.KYZ_MonthlyDemand          TO kyz_dashboard;
 GRANT SELECT ON dbo.v_KYZ_MonthlyDemand_Latest TO kyz_dashboard;
 
-GRANT EXEC  ON dbo.usp_KYZ_Refresh_MonthlyDemand TO kyz_ingestor;
+GRANT EXECUTE ON dbo.usp_KYZ_Refresh_MonthlyDemand TO kyz_ingestor;
+GRANT SELECT, INSERT, UPDATE ON dbo.KYZ_MonthlyDemand TO kyz_ingestor;
 GO

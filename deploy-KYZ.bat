@@ -39,15 +39,15 @@ if errorlevel 1 (
   goto :end
 )
 
-powershell -NoProfile -ExecutionPolicy Bypass -File "%DST%\scripts\windows\create_taskscheduler_jobs.ps1" -RunNow
-if errorlevel 1 (
-  echo [ERROR] create_taskscheduler_jobs.ps1 -RunNow failed.
+if not exist "%DST%\dashboard\api\static\index.html" (
+  echo [ERROR] dashboard\api\static\index.html is missing after deployment.
   set "RC=1"
   goto :end
 )
 
-if not exist "%DST%\dashboard\api\static\index.html" (
-  echo [ERROR] dashboard\api\static\index.html is missing after deployment.
+powershell -NoProfile -ExecutionPolicy Bypass -File "%DST%\scripts\windows\create_taskscheduler_jobs.ps1" -RunNow
+if errorlevel 1 (
+  echo [ERROR] create_taskscheduler_jobs.ps1 -RunNow failed.
   set "RC=1"
   goto :end
 )
