@@ -1,7 +1,7 @@
 import argparse
+import logging
 import os
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 
 import pyodbc
@@ -12,8 +12,26 @@ class ConfigError(Exception):
     """Raised when required configuration is missing."""
 
 
-def load_repo_env() -> None:
-    repo_root = Path(__file__).resolve().parents[2]
+def get_repo_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
+def configure_logging(repo_root: Path) -> logging.Logger:
+    logs_dir = repo_root / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+
+    logger = logging.getLogger("purge_live15s")
+    logger.setLevel(logging.INFO)
+    logger.handlers.clear()
+
+    file_handler = logging.FileHandler(logs_dir / "purge_live15s.log", encoding="utf-8")
+    formatter = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+    return logger
+
+
+def load_repo_env(repo_root: Path) -> None:
     load_dotenv(repo_root / ".env")
 
 
@@ -46,18 +64,17 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    load_repo_env()
+    repo_root = get_repo_root()
+    logger = configure_logging(repo_root)
+    load_repo_env(repo_root)
 
     if args.retention_days < 0:
-        print("Error: --retention-days must be >= 0", file=sys.stderr)
+        logger.error("Invalid --retention-days: %s", args.retention_days)
         return 2
 
     if args.batch_size <= 0:
-        print("Error: --batch-size must be > 0", file=sys.stderr)
+        logger.error("Invalid --batch-size: %s", args.batch_size)
         return 2
-
-    cutoff_utc = datetime.now(timezone.utc)
-    rows_deleted = None
 
     try:
         with pyodbc.connect(get_sql_connection_string(), autocommit=True) as conn:
@@ -68,17 +85,18 @@ def main() -> int:
                 args.batch_size,
             )
             row = cursor.fetchone()
-            if row is not None and len(row) >= 2:
-                rows_deleted = row[0]
-                cutoff_utc = row[1]
     except (ConfigError, pyodbc.Error) as exc:
-        print(f"Purge failed: {exc}", file=sys.stderr)
+        logger.exception("KYZ_Live15s retention failed: %s", exc)
         return 1
 
-    print(
-        "KYZ_Live15s retention complete "
-        f"rows_deleted={rows_deleted if rows_deleted is not None else 'unknown'} "
-        f"cutoff_utc={cutoff_utc}"
+    rows_deleted = row[0] if row is not None and len(row) >= 1 else None
+    cutoff_utc = row[1] if row is not None and len(row) >= 2 else None
+    logger.info(
+        "KYZ_Live15s retention complete retention_days=%s batch_size=%s rows_deleted=%s cutoff_utc=%s",
+        args.retention_days,
+        args.batch_size,
+        rows_deleted,
+        cutoff_utc,
     )
     return 0
 

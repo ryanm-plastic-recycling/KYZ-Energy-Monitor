@@ -1,15 +1,32 @@
+import logging
 import os
-import sys
 from pathlib import Path
 
 import pyodbc
 from dotenv import load_dotenv
 
-ENV_PATH = Path(r"C:\apps\kyz-energy-monitor\.env")
-
 
 class ConfigError(Exception):
     """Raised when required configuration is missing."""
+
+
+def get_repo_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
+def configure_logging(repo_root: Path) -> logging.Logger:
+    logs_dir = repo_root / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+
+    logger = logging.getLogger("monthly_demand_refresh")
+    logger.setLevel(logging.INFO)
+    logger.handlers.clear()
+
+    file_handler = logging.FileHandler(logs_dir / "monthly_demand_refresh.log", encoding="utf-8")
+    formatter = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+    return logger
 
 
 def get_required_env(name: str) -> str:
@@ -33,16 +50,18 @@ def get_sql_connection_string() -> str:
 
 
 def main() -> int:
-    load_dotenv(ENV_PATH)
+    repo_root = get_repo_root()
+    logger = configure_logging(repo_root)
+    load_dotenv(repo_root / ".env")
 
     try:
         with pyodbc.connect(get_sql_connection_string(), autocommit=True) as conn:
             conn.execute("EXEC dbo.usp_KYZ_Refresh_MonthlyDemand;")
     except (ConfigError, pyodbc.Error) as exc:
-        print(f"Monthly demand refresh failed: {exc}", file=sys.stderr)
+        logger.exception("Monthly demand refresh failed: %s", exc)
         return 1
 
-    print("Monthly demand refresh completed.")
+    logger.info("Monthly demand refresh completed.")
     return 0
 
 
