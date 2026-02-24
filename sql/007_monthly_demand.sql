@@ -1,184 +1,151 @@
 /* =========================================================
-   007_monthly_demand.sql
-   - Raw monthly demand view (top3 avg / peak / energy)
-   - Snapshot table + proc for billed demand (ratchet + min 50)
+   007_monthly_demand_billed.sql
+   - Adds billed demand (top3 avg + 60% ratchet prev 11 + min 50kW)
+   - Optional snapshot table + refresh proc
    ========================================================= */
 
--- ---------- Option A: raw monthly stats ----------
-CREATE OR ALTER VIEW dbo.v_KYZ_MonthlyDemandRaw AS
+-- 1) Billed demand view (builds on your existing vw_KYZ_MonthlyBillingDemandEstimate)
+CREATE OR ALTER VIEW dbo.vw_KYZ_MonthlyBillingDemandBilled
+AS
 WITH base AS (
     SELECT
-        CAST(DATEFROMPARTS(YEAR(IntervalEnd), MONTH(IntervalEnd), 1) AS date) AS MonthStart,
-        kW,
-        kWh
-    FROM dbo.KYZ_Interval
-    WHERE kW IS NOT NULL
-      AND ISNULL(R17Exclude, 0) = 0
-      AND ISNULL(KyzInvalidAlarm, 0) = 0
+        month_start,
+        CAST(top3_avg_kW AS float) AS top3_avg_kW,
+        CAST(peak_kW     AS float) AS peak_kW
+    FROM dbo.vw_KYZ_MonthlyBillingDemandEstimate
 ),
-ranked AS (
+w AS (
     SELECT
-        MonthStart,
-        kW,
-        kWh,
-        ROW_NUMBER() OVER (PARTITION BY MonthStart ORDER BY kW DESC) AS rn
-    FROM base
+        b.*,
+        MAX(b.top3_avg_kW) OVER (
+            ORDER BY b.month_start
+            ROWS BETWEEN 11 PRECEDING AND 1 PRECEDING
+        ) AS HighestPrev11_Billed_kW
+    FROM base b
+),
+final AS (
+    SELECT
+        month_start,
+        top3_avg_kW,
+        peak_kW,
+        HighestPrev11_Billed_kW,
+        CAST(ISNULL(0.60 * HighestPrev11_Billed_kW, 0.0) AS float) AS RatchetFloor_kW,
+        ca.Billed_kW
+    FROM w
+    CROSS APPLY (
+        SELECT MAX(v) AS Billed_kW
+        FROM (VALUES
+            (CAST(ISNULL(w.top3_avg_kW, 0.0) AS float)),
+            (CAST(ISNULL(0.60 * w.HighestPrev11_Billed_kW, 0.0) AS float)),
+            (CAST(50.0 AS float))
+        ) AS x(v)
+    ) ca
 )
 SELECT
-    MonthStart,
-    AVG(CASE WHEN rn <= 3 THEN kW END) AS Top3Avg_kW,
-    MAX(kW) AS Peak_kW,
-    SUM(kWh) AS Energy_kWh
-FROM ranked
-GROUP BY MonthStart;
+    month_start,
+    top3_avg_kW,
+    peak_kW,
+    HighestPrev11_Billed_kW,
+    RatchetFloor_kW,
+    Billed_kW
+FROM final;
 GO
 
 
--- ---------- Option B: snapshot billed demand (ratchet-aware) ----------
+-- 2) Snapshot table (audit-friendly; tiny; keep forever)
 IF OBJECT_ID('dbo.KYZ_MonthlyDemand', 'U') IS NULL
 BEGIN
     CREATE TABLE dbo.KYZ_MonthlyDemand
     (
-        MonthStart               date         NOT NULL,
-        Top3Avg_kW               float        NOT NULL,
-        Peak_kW                  float        NOT NULL,
-        Energy_kWh               float        NOT NULL,
-
-        HighestPrev11_Billed_kW  float        NOT NULL,
-        RatchetFloor_kW          float        NOT NULL,
-        Billed_kW                float        NOT NULL,
-
+        month_start              date         NOT NULL,
+        top3_avg_kW              float        NULL,
+        peak_kW                  float        NULL,
+        Energy_kWh               float        NULL,
+        HighestPrev11_Billed_kW  float        NULL,
+        RatchetFloor_kW          float        NULL,
+        Billed_kW                float        NULL,
         ComputedAtUtc            datetime2(3) NOT NULL
             CONSTRAINT DF_KYZ_MonthlyDemand_ComputedAtUtc DEFAULT SYSUTCDATETIME(),
-
-        CONSTRAINT PK_KYZ_MonthlyDemand PRIMARY KEY CLUSTERED (MonthStart)
+        CONSTRAINT PK_KYZ_MonthlyDemand PRIMARY KEY CLUSTERED (month_start)
     );
 END;
 GO
 
+-- Add missing columns if table existed from a partial run
+IF COL_LENGTH('dbo.KYZ_MonthlyDemand', 'Energy_kWh') IS NULL
+    ALTER TABLE dbo.KYZ_MonthlyDemand ADD Energy_kWh float NULL;
+IF COL_LENGTH('dbo.KYZ_MonthlyDemand', 'HighestPrev11_Billed_kW') IS NULL
+    ALTER TABLE dbo.KYZ_MonthlyDemand ADD HighestPrev11_Billed_kW float NULL;
+IF COL_LENGTH('dbo.KYZ_MonthlyDemand', 'RatchetFloor_kW') IS NULL
+    ALTER TABLE dbo.KYZ_MonthlyDemand ADD RatchetFloor_kW float NULL;
+IF COL_LENGTH('dbo.KYZ_MonthlyDemand', 'Billed_kW') IS NULL
+    ALTER TABLE dbo.KYZ_MonthlyDemand ADD Billed_kW float NULL;
+IF COL_LENGTH('dbo.KYZ_MonthlyDemand', 'ComputedAtUtc') IS NULL
+BEGIN
+    ALTER TABLE dbo.KYZ_MonthlyDemand ADD ComputedAtUtc datetime2(3) NOT NULL
+        CONSTRAINT DF_KYZ_MonthlyDemand_ComputedAtUtc2 DEFAULT SYSUTCDATETIME();
+END;
+GO
+
+
+-- 3) Refresh proc (run nightly or on demand)
 CREATE OR ALTER PROCEDURE dbo.usp_KYZ_Refresh_MonthlyDemand
 AS
 BEGIN
     SET NOCOUNT ON;
 
-    DECLARE @MinMonth date =
-        (SELECT MIN(CAST(DATEFROMPARTS(YEAR(IntervalEnd), MONTH(IntervalEnd), 1) AS date))
-         FROM dbo.KYZ_Interval);
-
-    IF @MinMonth IS NULL
-        RETURN;
-
-    DECLARE @MaxMonth date =
-        CAST(DATEFROMPARTS(YEAR(SYSUTCDATETIME()), MONTH(SYSUTCDATETIME()), 1) AS date);
-
-    ;WITH MonthList AS (
-        SELECT @MinMonth AS MonthStart
-        UNION ALL
-        SELECT DATEADD(month, 1, MonthStart)
-        FROM MonthList
-        WHERE MonthStart < @MaxMonth
+    ;WITH energy AS (
+        SELECT
+            DATEFROMPARTS(YEAR(IntervalEnd), MONTH(IntervalEnd), 1) AS month_start,
+            SUM(CAST(kWh AS float)) AS Energy_kWh
+        FROM dbo.KYZ_Interval
+        WHERE ISNULL(KyzInvalidAlarm, 0) = 0
+        GROUP BY DATEFROMPARTS(YEAR(IntervalEnd), MONTH(IntervalEnd), 1)
+    ),
+    billed AS (
+        SELECT
+            b.month_start,
+            b.top3_avg_kW,
+            b.peak_kW,
+            e.Energy_kWh,
+            b.HighestPrev11_Billed_kW,
+            b.RatchetFloor_kW,
+            b.Billed_kW
+        FROM dbo.vw_KYZ_MonthlyBillingDemandBilled b
+        LEFT JOIN energy e
+            ON e.month_start = b.month_start
     )
-    SELECT MonthStart
-    INTO #months
-    FROM MonthList
-    OPTION (MAXRECURSION 32767);
-
-    -- Raw per month (0-filled if no data)
-    SELECT
-        m.MonthStart,
-        COALESCE(r.Top3Avg_kW, 0.0) AS Top3Avg_kW,
-        COALESCE(r.Peak_kW, 0.0)    AS Peak_kW,
-        COALESCE(r.Energy_kWh, 0.0) AS Energy_kWh
-    INTO #raw
-    FROM #months m
-    LEFT JOIN dbo.v_KYZ_MonthlyDemandRaw r
-        ON r.MonthStart = m.MonthStart;
-
-    CREATE TABLE #out
-    (
-        MonthStart              date  NOT NULL PRIMARY KEY,
-        Top3Avg_kW              float NOT NULL,
-        Peak_kW                 float NOT NULL,
-        Energy_kWh              float NOT NULL,
-        HighestPrev11_Billed_kW float NOT NULL,
-        RatchetFloor_kW         float NOT NULL,
-        Billed_kW               float NOT NULL
-    );
-
-    DECLARE @m date;
-
-    DECLARE c CURSOR LOCAL FAST_FORWARD FOR
-        SELECT MonthStart FROM #months ORDER BY MonthStart;
-
-    OPEN c;
-    FETCH NEXT FROM c INTO @m;
-
-    WHILE @@FETCH_STATUS = 0
-    BEGIN
-        DECLARE @top3 float = (SELECT Top3Avg_kW FROM #raw WHERE MonthStart = @m);
-        DECLARE @peak float = (SELECT Peak_kW    FROM #raw WHERE MonthStart = @m);
-        DECLARE @kwh  float = (SELECT Energy_kWh FROM #raw WHERE MonthStart = @m);
-
-        DECLARE @highestPrev11 float =
-            COALESCE((
-                SELECT MAX(Billed_kW)
-                FROM #out
-                WHERE MonthStart >= DATEADD(month, -11, @m)
-                  AND MonthStart <  @m
-            ), 0.0);
-
-        DECLARE @ratchetFloor float = 0.60 * @highestPrev11;
-
-        -- billed = max(top3, ratchetFloor, 50)
-        DECLARE @billed float =
-            (SELECT MAX(v) FROM (VALUES (@top3), (@ratchetFloor), (50.0)) AS x(v));
-
-        INSERT INTO #out(MonthStart, Top3Avg_kW, Peak_kW, Energy_kWh, HighestPrev11_Billed_kW, RatchetFloor_kW, Billed_kW)
-        VALUES (@m, @top3, @peak, @kwh, @highestPrev11, @ratchetFloor, @billed);
-
-        FETCH NEXT FROM c INTO @m;
-    END
-
-    CLOSE c;
-    DEALLOCATE c;
-
     MERGE dbo.KYZ_MonthlyDemand AS tgt
-    USING #out AS src
-      ON tgt.MonthStart = src.MonthStart
+    USING billed AS src
+        ON tgt.month_start = src.month_start
     WHEN MATCHED THEN
-      UPDATE SET
-        Top3Avg_kW              = src.Top3Avg_kW,
-        Peak_kW                 = src.Peak_kW,
-        Energy_kWh              = src.Energy_kWh,
-        HighestPrev11_Billed_kW = src.HighestPrev11_Billed_kW,
-        RatchetFloor_kW         = src.RatchetFloor_kW,
-        Billed_kW               = src.Billed_kW,
-        ComputedAtUtc           = SYSUTCDATETIME()
+        UPDATE SET
+            top3_avg_kW             = src.top3_avg_kW,
+            peak_kW                 = src.peak_kW,
+            Energy_kWh              = src.Energy_kWh,
+            HighestPrev11_Billed_kW = src.HighestPrev11_Billed_kW,
+            RatchetFloor_kW         = src.RatchetFloor_kW,
+            Billed_kW               = src.Billed_kW,
+            ComputedAtUtc           = SYSUTCDATETIME()
     WHEN NOT MATCHED THEN
-      INSERT (MonthStart, Top3Avg_kW, Peak_kW, Energy_kWh, HighestPrev11_Billed_kW, RatchetFloor_kW, Billed_kW)
-      VALUES (src.MonthStart, src.Top3Avg_kW, src.Peak_kW, src.Energy_kWh, src.HighestPrev11_Billed_kW, src.RatchetFloor_kW, src.Billed_kW);
-
+        INSERT (month_start, top3_avg_kW, peak_kW, Energy_kWh, HighestPrev11_Billed_kW, RatchetFloor_kW, Billed_kW, ComputedAtUtc)
+        VALUES (src.month_start, src.top3_avg_kW, src.peak_kW, src.Energy_kWh, src.HighestPrev11_Billed_kW, src.RatchetFloor_kW, src.Billed_kW, SYSUTCDATETIME());
 END;
 GO
 
-CREATE OR ALTER VIEW dbo.v_KYZ_MonthlyDemand_Latest AS
+
+-- 4) Latest view (this is the one your failed script tried to create)
+CREATE OR ALTER VIEW dbo.v_KYZ_MonthlyDemand_Latest
+AS
 SELECT TOP (1)
-    MonthStart,
-    Top3Avg_kW,
-    Peak_kW,
+    month_start,
+    top3_avg_kW,
+    peak_kW,
     Energy_kWh,
     HighestPrev11_Billed_kW,
     RatchetFloor_kW,
     Billed_kW,
     ComputedAtUtc
 FROM dbo.KYZ_MonthlyDemand
-ORDER BY MonthStart DESC;
-GO
-
--- Grants (adjust users if yours differ)
-GRANT SELECT ON dbo.v_KYZ_MonthlyDemandRaw     TO kyz_dashboard;
-GRANT SELECT ON dbo.KYZ_MonthlyDemand          TO kyz_dashboard;
-GRANT SELECT ON dbo.v_KYZ_MonthlyDemand_Latest TO kyz_dashboard;
-
-GRANT EXEC  ON dbo.usp_KYZ_Refresh_MonthlyDemand TO kyz_ingestor;
+ORDER BY month_start DESC;
 GO

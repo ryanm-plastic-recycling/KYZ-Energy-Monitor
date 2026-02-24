@@ -1,106 +1,78 @@
 param(
-    [Parameter(Mandatory=$true)]
-    [string]$RepoRoot,
-
+    [string]$RepoRoot = "C:\apps\kyz-energy-monitor",
     [string]$TaskUser = "SYSTEM",
-
     [switch]$RunNow,
-
-    [int]$RetentionDays = 7,
-
-    # Local time on the server
-    [string]$RetentionTime = "02:10"
+    [int]$RetentionDays = 7
 )
 
 $ErrorActionPreference = "Stop"
 
-if (-not (Test-Path $RepoRoot)) {
-    throw "RepoRoot not found: $RepoRoot"
-}
-
-Import-Module ScheduledTasks
-
-$ingestorTask   = "KYZ-Ingestor"
-$dashboardTask  = "KYZ-Dashboard-API"
-$retentionTask  = "KYZ-Live15s-Retention"
+Write-Host "Registering Task Scheduler jobs in $RepoRoot (RunAs=$TaskUser) ..."
 
 $logsDir = Join-Path $RepoRoot "logs"
-New-Item -ItemType Directory -Force -Path $logsDir | Out-Null
-
-$pyIngestor  = Join-Path $RepoRoot ".venv\Scripts\python.exe"
-$pyDashApi   = Join-Path $RepoRoot "dashboard\api\.venv\Scripts\python.exe"
-$purgeScript = Join-Path $RepoRoot "scripts\windows\purge_live15s.py"
-
-if (-not (Test-Path $pyIngestor)) { throw "Missing: $pyIngestor (run install_ingestor.ps1 first)" }
-if (-not (Test-Path $pyDashApi))  { throw "Missing: $pyDashApi (run install_dashboard.ps1 first)" }
-if (-not (Test-Path $purgeScript)) { throw "Missing: $purgeScript" }
-
-# Principal (SYSTEM only, by design)
-if ($TaskUser.ToUpper() -ne "SYSTEM") {
-    throw "This script currently supports TaskUser=SYSTEM only (no password handling)."
+if (-not (Test-Path $logsDir)) {
+    New-Item -ItemType Directory -Force -Path $logsDir | Out-Null
 }
-$principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
 
-# Settings: do NOT stop after 72 hours; restart on failure
-$settingsLongRun = New-ScheduledTaskSettingsSet `
-    -ExecutionTimeLimit ([TimeSpan]::Zero) `
-    -RestartCount 3 `
-    -RestartInterval (New-TimeSpan -Minutes 1) `
-    -StartWhenAvailable `
-    -MultipleInstances IgnoreNew
-
-$settingsShortRun = New-ScheduledTaskSettingsSet `
-    -ExecutionTimeLimit (New-TimeSpan -Minutes 30) `
-    -RestartCount 1 `
-    -RestartInterval (New-TimeSpan -Minutes 5) `
-    -StartWhenAvailable `
-    -MultipleInstances IgnoreNew
-
-# Actions
-$ingestorAction = New-ScheduledTaskAction `
-    -Execute $pyIngestor `
-    -Argument "main.py" `
-    -WorkingDirectory $RepoRoot
-
-$dashboardAction = New-ScheduledTaskAction `
-    -Execute $pyDashApi `
-    -Argument "-m uvicorn dashboard.api.app:app --host 0.0.0.0 --port 8080" `
-    -WorkingDirectory $RepoRoot
-
-$retentionAction = New-ScheduledTaskAction `
-    -Execute $pyIngestor `
-    -Argument ("{0} --retention-days {1}" -f $purgeScript, $RetentionDays) `
-    -WorkingDirectory $RepoRoot
-
-# Triggers
-$startupTrigger = New-ScheduledTaskTrigger -AtStartup
-
-# Parse retention time (today's date with that time; scheduler only uses the time portion)
-$retTime = Get-Date $RetentionTime
-$dailyTrigger = New-ScheduledTaskTrigger -Daily -At $retTime
-
-function ReRegister-Task {
+function Register-OrReplaceTask {
     param(
-        [string]$Name,
-        $Action,
-        $Trigger,
-        $Settings
+        [Parameter(Mandatory=$true)][string]$Name,
+        [Parameter(Mandatory=$true)][string]$Exe,
+        [Parameter(Mandatory=$true)][string]$Arguments,
+        [Parameter(Mandatory=$true)]$Trigger
     )
 
-    if (Get-ScheduledTask -TaskName $Name -ErrorAction SilentlyContinue) {
-        Unregister-ScheduledTask -TaskName $Name -Confirm:$false
+    if (-not (Test-Path $Exe)) {
+        throw "Executable not found: $Exe"
     }
 
-    Register-ScheduledTask -TaskName $Name -Action $Action -Trigger $Trigger -Principal $principal -Settings $Settings | Out-Null
-    Write-Host "Registered task: $Name"
+    $action = New-ScheduledTaskAction -Execute $Exe -Argument $Arguments -WorkingDirectory $RepoRoot
+
+    if ($TaskUser -eq "SYSTEM" -or $TaskUser -eq "NT AUTHORITY\SYSTEM") {
+        $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+    } else {
+        # If you ever use a non-SYSTEM user, you’ll need to adjust to a passworded principal.
+        $principal = New-ScheduledTaskPrincipal -UserId $TaskUser -LogonType Password -RunLevel Highest
+    }
+
+    $settings = New-ScheduledTaskSettingsSet `
+        -AllowStartIfOnBatteries `
+        -DontStopIfGoingOnBatteries `
+        -StartWhenAvailable `
+        -ExecutionTimeLimit (New-TimeSpan -Hours 72) `
+        -MultipleInstances IgnoreNew
+
+    $task = New-ScheduledTask -Action $action -Trigger $Trigger -Principal $principal -Settings $settings
+
+    try {
+        $existing = Get-ScheduledTask -TaskName $Name -ErrorAction SilentlyContinue
+        if ($existing) {
+            try { Stop-ScheduledTask -TaskName $Name -ErrorAction SilentlyContinue } catch {}
+        }
+        Register-ScheduledTask -TaskName $Name -InputObject $task -Force | Out-Null
+        Write-Host "Registered task: $Name"
+    } catch {
+        throw "Failed to register task '$Name': $($_.Exception.Message)"
+    }
 }
 
-ReRegister-Task -Name $ingestorTask  -Action $ingestorAction  -Trigger $startupTrigger -Settings $settingsLongRun
-ReRegister-Task -Name $dashboardTask -Action $dashboardAction -Trigger $startupTrigger -Settings $settingsLongRun
-ReRegister-Task -Name $retentionTask -Action $retentionAction -Trigger $dailyTrigger   -Settings $settingsShortRun
+# --- Main tasks ---
+$ingestorExe  = Join-Path $RepoRoot ".venv\Scripts\python.exe"
+$dashboardExe = Join-Path $RepoRoot "dashboard\api\.venv\Scripts\python.exe"
+
+Register-OrReplaceTask -Name "KYZ-Ingestor" -Exe $ingestorExe -Arguments "main.py" -Trigger (New-ScheduledTaskTrigger -AtStartup)
+
+Register-OrReplaceTask -Name "KYZ-Dashboard-API" -Exe $dashboardExe -Arguments "-m uvicorn dashboard.api.app:app --host 0.0.0.0 --port 8080" -Trigger (New-ScheduledTaskTrigger -AtStartup)
+
+# --- 7-day retention for Live15s ---
+# Runs daily at 2:05 AM local server time
+$retentionExe = $ingestorExe
+$retentionArgs = "scripts\windows\purge_live15s.py --retention-days $RetentionDays"
+Register-OrReplaceTask -Name "KYZ-Live15s-Retention" -Exe $retentionExe -Arguments $retentionArgs -Trigger (New-ScheduledTaskTrigger -Daily -At 2:05AM)
 
 if ($RunNow) {
-    Start-ScheduledTask -TaskName $ingestorTask
-    Start-ScheduledTask -TaskName $dashboardTask
-    Write-Host "Started: $ingestorTask, $dashboardTask"
+    Start-ScheduledTask -TaskName "KYZ-Ingestor" | Out-Null
+    Start-ScheduledTask -TaskName "KYZ-Dashboard-API" | Out-Null
+    Start-ScheduledTask -TaskName "KYZ-Live15s-Retention" | Out-Null
+    Write-Host "Started tasks (including retention)."
 }
