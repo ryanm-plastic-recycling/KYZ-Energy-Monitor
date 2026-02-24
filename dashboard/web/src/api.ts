@@ -1,4 +1,4 @@
-import type { BillingMonth, DailyPoint, Health, LatestRow, LiveLatestRow, LiveSeriesPoint, Metrics, Quality, Summary } from './types'
+import type { BillingMonth, DailyPoint, Health, IntervalSeriesPoint, LatestRow, LiveLatestRow, LiveSeriesPoint, Metrics, Quality, Summary } from './types'
 
 const token = new URLSearchParams(window.location.search).get('token')
 
@@ -14,7 +14,12 @@ export const client = {
   health: () => apiGet<Health>('/api/health'),
   latest: () => apiGet<LatestRow>('/api/latest'),
   liveLatest: () => apiGet<LiveLatestRow>('/api/live/latest'),
-  series: (minutes: number) => apiGet<{ points: Array<{ t: string; kW: number; kWh: number }> }>(`/api/series?minutes=${minutes}`),
+  series: (minutes: number, start?: string, end?: string) => {
+    const params = new URLSearchParams({ minutes: String(minutes) })
+    if (start) params.set('start', start)
+    if (end) params.set('end', end)
+    return apiGet<{ points: IntervalSeriesPoint[] }>(`/api/series?${params.toString()}`)
+  },
   liveSeries: (minutes: number) => apiGet<{ points: LiveSeriesPoint[] }>(`/api/live/series?minutes=${minutes}`),
   summary: () => apiGet<Summary>('/api/summary'),
   billing: (months = 24) => apiGet<{ months: BillingMonth[] }>(`/api/billing?months=${months}`),
