@@ -70,9 +70,16 @@ $retentionExe = $ingestorExe
 $retentionArgs = "scripts\windows\purge_live15s.py --retention-days $RetentionDays"
 Register-OrReplaceTask -Name "KYZ-Live15s-Retention" -Exe $retentionExe -Arguments $retentionArgs -Trigger (New-ScheduledTaskTrigger -Daily -At 2:05AM)
 
+# --- Monthly demand billed snapshot refresh ---
+# Runs daily at 2:10 AM local server time
+$monthlyDemandExe = $ingestorExe
+$monthlyDemandArgs = "scripts\windows\refresh_monthly_demand.py"
+Register-OrReplaceTask -Name "KYZ-MonthlyDemand-Refresh" -Exe $monthlyDemandExe -Arguments $monthlyDemandArgs -Trigger (New-ScheduledTaskTrigger -Daily -At 2:10AM)
+
 if ($RunNow) {
     Start-ScheduledTask -TaskName "KYZ-Ingestor" | Out-Null
     Start-ScheduledTask -TaskName "KYZ-Dashboard-API" | Out-Null
     Start-ScheduledTask -TaskName "KYZ-Live15s-Retention" | Out-Null
-    Write-Host "Started tasks (including retention)."
+    Start-ScheduledTask -TaskName "KYZ-MonthlyDemand-Refresh" | Out-Null
+    Write-Host "Started tasks (including retention and monthly-demand refresh)."
 }
