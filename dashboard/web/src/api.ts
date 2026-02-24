@@ -1,4 +1,4 @@
-import type { BillingMonth, Health, LatestRow, LiveLatestRow, LiveSeriesPoint, Metrics, Quality, Summary } from './types'
+import type { BillingMonth, DailyPoint, Health, LatestRow, LiveLatestRow, LiveSeriesPoint, Metrics, Quality, Summary } from './types'
 
 const token = new URLSearchParams(window.location.search).get('token')
 
@@ -20,4 +20,5 @@ export const client = {
   billing: (months = 24) => apiGet<{ months: BillingMonth[] }>(`/api/billing?months=${months}`),
   quality: () => apiGet<Quality>('/api/quality'),
   metrics: () => apiGet<Metrics>('/api/metrics'),
+  daily: (days: number) => apiGet<{ days: DailyPoint[] }>(`/api/daily?days=${days}`),
 }
