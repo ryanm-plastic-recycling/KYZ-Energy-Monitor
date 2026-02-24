@@ -11,7 +11,7 @@ END;
 GO
 
 CREATE OR ALTER PROCEDURE dbo.usp_KYZ_Purge_Live15s
-    @RetentionDays INT = 7,
+    @RetentionDays INT = 60,
     @BatchSize INT = 50000
 WITH EXECUTE AS OWNER
 AS
