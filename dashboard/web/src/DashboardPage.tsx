@@ -1,10 +1,38 @@
 import ReactECharts from 'echarts-for-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { NavLink, Route, Routes } from 'react-router-dom'
 import { client } from './api'
-import type { BillingMonth, LiveSeriesPoint, Metrics, Quality, Summary } from './types'
+import type { BillingMonth, DailyPoint, LiveSeriesPoint, Metrics, Quality, Summary } from './types'
 
 const money = (n: number) => `$${n.toLocaleString(undefined, { maximumFractionDigits: 0 })}`
+
+const toDate = (dateText: string) => new Date(`${dateText}T00:00:00`)
+
+function getMonthRange(base: Date, offsetMonths = 0): { start: Date; end: Date } {
+  const year = base.getFullYear()
+  const month = base.getMonth() + offsetMonths
+  const start = new Date(year, month, 1)
+  const end = new Date(year, month + 1, 1)
+  return { start, end }
+}
+
+function getCurrentWeekRange(base: Date): { start: Date; end: Date } {
+  const day = base.getDay()
+  const mondayOffset = day === 0 ? -6 : 1 - day
+  const start = new Date(base)
+  start.setHours(0, 0, 0, 0)
+  start.setDate(base.getDate() + mondayOffset)
+  const end = new Date(start)
+  end.setDate(start.getDate() + 7)
+  return { start, end }
+}
+
+function filterDailyRange(data: DailyPoint[], start: Date, end: Date): DailyPoint[] {
+  return data.filter((point) => {
+    const current = toDate(point.date)
+    return current >= start && current < end
+  })
+}
 
 export function DashboardPage() {
   const [summary, setSummary] = useState<Summary | null>(null)
@@ -13,16 +41,18 @@ export function DashboardPage() {
   const [metrics, setMetrics] = useState<Metrics | null>(null)
   const [series24h, setSeries24h] = useState<Array<{ t: string; kW: number }>>([])
   const [liveSeries30m, setLiveSeries30m] = useState<LiveSeriesPoint[]>([])
+  const [dailySeries, setDailySeries] = useState<DailyPoint[]>([])
 
   useEffect(() => {
     const load = async () => {
-      const [s, b, q, m, series, liveSeries] = await Promise.all([
+      const [s, b, q, m, series, liveSeries, daily] = await Promise.all([
         client.summary(),
         client.billing(24),
         client.quality(),
         client.metrics(),
         client.series(24 * 60),
         client.liveSeries(30),
+        client.daily(62),
       ])
       setSummary(s)
       setBilling(b.months)
@@ -30,11 +60,26 @@ export function DashboardPage() {
       setMetrics(m)
       setSeries24h(series.points)
       setLiveSeries30m(liveSeries.points)
+      setDailySeries(daily.days)
     }
     load().catch(() => undefined)
     const t = setInterval(() => load().catch(() => undefined), 15000)
     return () => clearInterval(t)
   }, [])
+
+  const now = useMemo(() => new Date(), [dailySeries])
+  const lastMonthProfile = useMemo(() => {
+    const range = getMonthRange(now, -1)
+    return filterDailyRange(dailySeries, range.start, range.end)
+  }, [dailySeries, now])
+  const currentMonthProfile = useMemo(() => {
+    const range = getMonthRange(now)
+    return filterDailyRange(dailySeries, range.start, range.end)
+  }, [dailySeries, now])
+  const currentWeekProfile = useMemo(() => {
+    const range = getCurrentWeekRange(now)
+    return filterDailyRange(dailySeries, range.start, range.end)
+  }, [dailySeries, now])
 
   return (
     <div className="page">
@@ -55,8 +100,8 @@ export function DashboardPage() {
       </nav>
 
       <Routes>
-        <Route path="/" element={<Executive summary={summary} liveSeries30m={liveSeries30m} />} />
-        <Route path="/operations" element={<Operations series24h={series24h} metrics={metrics} />} />
+        <Route path="/" element={<Executive summary={summary} liveSeries30m={liveSeries30m} currentMonthProfile={currentMonthProfile} />} />
+        <Route path="/operations" element={<Operations series24h={series24h} metrics={metrics} lastMonthProfile={lastMonthProfile} currentMonthProfile={currentMonthProfile} currentWeekProfile={currentWeekProfile} />} />
         <Route path="/billing-risk" element={<BillingRisk summary={summary} billing={billing} />} />
         <Route path="/data-quality" element={<DataQuality quality={quality} />} />
       </Routes>
@@ -64,7 +109,7 @@ export function DashboardPage() {
   )
 }
 
-function Executive({ summary, liveSeries30m }: { summary: Summary | null; liveSeries30m: LiveSeriesPoint[] }) {
+function Executive({ summary, liveSeries30m, currentMonthProfile }: { summary: Summary | null; liveSeries30m: LiveSeriesPoint[]; currentMonthProfile: DailyPoint[] }) {
   return <section className="grid kpis">
     <Card t="Current kW (15m demand)" v={summary?.currentKW?.toFixed(2) ?? '—'} />
     <Card t="Live kW (15s)" v={summary?.currentKW_15s?.toFixed(2) ?? '—'} />
@@ -78,12 +123,16 @@ function Executive({ summary, liveSeries30m }: { summary: Summary | null; liveSe
     <Card t="Demand Est. $/month" v={summary ? money(summary.demandEstimateMonth) : '—'} />
     <Card t="Cost of 100 kW Peak" v={summary ? money(summary.costOf100kwPeakAnnual) + '/yr' : '—'} />
     <div className="card chart-card full"><h3>Live kW - Last 30 Minutes</h3><ReactECharts style={{ height: 260 }} option={{ xAxis: { type: 'category', data: liveSeries30m.map((p) => new Date(p.t).toLocaleTimeString()) }, yAxis: { type: 'value', name: 'kW' }, series: [{ type: 'line', data: liveSeries30m.map((p) => p.kW), smooth: true, lineStyle: { color: '#00a3ff' } }] }} /></div>
+    <div className="card chart-card full"><h3>Current Month kW Profile (to date)</h3><ReactECharts style={{ height: 280 }} option={{ tooltip: { trigger: 'axis' }, xAxis: { type: 'category', data: currentMonthProfile.map((p) => new Date(`${p.date}T00:00:00`).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })) }, yAxis: { type: 'value', name: 'kW' }, series: [{ type: 'line', data: currentMonthProfile.map((p) => p.kW_peak), smooth: true, lineStyle: { color: '#4c6ef5' } }] }} /></div>
   </section>
 }
 
-function Operations({ series24h, metrics }: { series24h: Array<{ t: string; kW: number }>; metrics: Metrics | null }) {
+function Operations({ series24h, metrics, lastMonthProfile, currentMonthProfile, currentWeekProfile }: { series24h: Array<{ t: string; kW: number }>; metrics: Metrics | null; lastMonthProfile: DailyPoint[]; currentMonthProfile: DailyPoint[]; currentWeekProfile: DailyPoint[] }) {
   return <section className="grid charts">
-    <div className="card chart-card full"><h3>kW Profile - Last 24 Hours</h3><ReactECharts style={{ height: 320 }} option={{ xAxis: { type: 'category', data: series24h.map((p) => new Date(p.t).toLocaleTimeString()) }, yAxis: { type: 'value' }, series: [{ type: 'line', data: series24h.map((p) => p.kW), smooth: true, lineStyle: { color: '#0a3a66' } }] }} /></div>
+    <div className="card chart-card full"><h3>kW Profile - Last 24 Hours</h3><ReactECharts style={{ height: 320 }} option={{ xAxis: { type: 'category', data: series24h.map((p) => new Date(p.t).toLocaleTimeString()) }, yAxis: { type: 'value', name: 'kW' }, series: [{ type: 'line', data: series24h.map((p) => p.kW), smooth: true, lineStyle: { color: '#0a3a66' } }] }} /></div>
+    <div className="card chart-card full"><h3>Last Month kW Profile</h3><ReactECharts style={{ height: 300 }} option={{ tooltip: { trigger: 'axis' }, xAxis: { type: 'category', data: lastMonthProfile.map((p) => new Date(`${p.date}T00:00:00`).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })) }, yAxis: { type: 'value', name: 'kW' }, series: [{ type: 'line', data: lastMonthProfile.map((p) => p.kW_peak), smooth: true, lineStyle: { color: '#228be6' } }] }} /></div>
+    <div className="card chart-card full"><h3>Current Month kW Profile (to date)</h3><ReactECharts style={{ height: 300 }} option={{ tooltip: { trigger: 'axis' }, xAxis: { type: 'category', data: currentMonthProfile.map((p) => new Date(`${p.date}T00:00:00`).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })) }, yAxis: { type: 'value', name: 'kW' }, series: [{ type: 'line', data: currentMonthProfile.map((p) => p.kW_peak), smooth: true, lineStyle: { color: '#5f3dc4' } }] }} /></div>
+    <div className="card chart-card full"><h3>Current Week kW (Monday to Sunday)</h3><ReactECharts style={{ height: 300 }} option={{ tooltip: { trigger: 'axis' }, xAxis: { type: 'category', data: currentWeekProfile.map((p) => new Date(`${p.date}T00:00:00`).toLocaleDateString(undefined, { weekday: 'short' })) }, yAxis: { type: 'value', name: 'kW' }, series: [{ type: 'bar', data: currentWeekProfile.map((p) => p.kW_peak), itemStyle: { color: '#0ca678' } }] }} /></div>
     <Card t="Rows (24h)" v={String(metrics?.rowCount24h ?? '—')} />
     <Card t="Seconds Since Last Interval" v={String(metrics?.secondsSinceLastInterval ?? '—')} />
   </section>

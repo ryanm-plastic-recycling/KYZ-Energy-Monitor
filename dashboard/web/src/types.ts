@@ -75,3 +75,10 @@ export type Metrics = {
   r17Exclude24h: number
   kyzInvalidAlarm24h: number
 }
+
+export type DailyPoint = {
+  date: string
+  kWh_sum: number
+  kW_peak: number
+  interval_count: number
+}
