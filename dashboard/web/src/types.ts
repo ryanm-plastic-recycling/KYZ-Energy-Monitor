@@ -51,10 +51,19 @@ export type Summary = {
   billedDemandEstimateKW: number
   demandEstimateMonth: number
   costOf100kwPeakAnnual: number
+  billingPeriodStart: string | null
+  billingPeriodEnd: string | null
+  btdKWh: number | null
+  billingEnergyEstimate: number | null
+  currentBillingPeriodTop3AvgKW: number | null
+  currentBillingPeriodBilledDemandKW: number | null
+  billingRatchetFloorKW: number | null
 }
 
 export type BillingMonth = {
   monthStart: string
+  periodStart: string
+  periodEnd: string
   top3AvgKW: number
   ratchetFloorKW: number
   billedDemandKW: number
@@ -63,6 +72,13 @@ export type BillingMonth = {
   energyCost: number
   customerCharge: number
   totalEstimatedCost: number
+}
+
+export type BillingResponse = {
+  basis: 'calendar' | 'billing'
+  requestedBasis: 'calendar' | 'billing'
+  anchorDate: string | null
+  months: BillingMonth[]
 }
 
 export type Quality = {

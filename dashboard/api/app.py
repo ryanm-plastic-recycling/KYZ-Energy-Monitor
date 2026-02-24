@@ -18,6 +18,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from dashboard.api.analytics import BillingMonth, TariffConfig, annualized_peak_cost, compute_billing_series
+from dashboard.api.billing_periods import add_months_clamped, billing_period_end, parse_billing_anchor
 
 load_dotenv()
 
@@ -96,6 +97,18 @@ def get_series_max_days() -> int:
 
 def get_allow_extended_ranges() -> bool:
     return os.getenv("API_ALLOW_EXTENDED_RANGE", "false").strip().lower() in {"1", "true", "yes"}
+
+
+def get_billing_anchor() -> datetime | None:
+    raw_anchor = os.getenv("BILLING_ANCHOR_DATE")
+    if raw_anchor is None or not raw_anchor.strip():
+        return None
+    try:
+        return parse_billing_anchor(raw_anchor)
+    except ValueError as exc:
+        logger.warning("Invalid BILLING_ANCHOR_DATE=%r; billing-period mode disabled", raw_anchor)
+        logger.debug("Anchor parse failure", exc_info=exc)
+        return None
 
 
 def get_sql_connection_string() -> str:
@@ -414,12 +427,17 @@ def get_daily(days: int = 14) -> dict[str, Any]:
 
 
 @app.get("/api/monthly-demand")
-def get_monthly_demand(months: int = 12) -> dict[str, Any]:
-    payload = get_billing(months=max(12, min(months, 24)))
+def get_monthly_demand(months: int = 12, basis: str = "calendar") -> dict[str, Any]:
+    # KYZ_MonthlyDemand SQL snapshots remain calendar-month based for backward compatibility.
+    payload = get_billing(months=max(12, min(months, 24)), basis=basis)
     return {
+        "basis": payload["basis"],
+        "anchorDate": payload["anchorDate"],
         "months": [
             {
                 "monthStart": m["monthStart"],
+                "periodStart": m["periodStart"],
+                "periodEnd": m["periodEnd"],
                 "peak_kW": m["billedDemandKW"],
                 "top3_avg_kW": m["top3AvgKW"],
             }
@@ -429,9 +447,13 @@ def get_monthly_demand(months: int = 12) -> dict[str, Any]:
 @app.get("/api/summary")
 def get_summary() -> dict[str, Any]:
     tariff = get_tariff_config()
-    billing = get_billing(24)
+    billing = get_billing(24, basis="calendar")
     months = billing["months"]
     current_month = months[-1] if months else None
+    billing_anchor = get_billing_anchor()
+    billing_period = get_billing(24, basis="billing")
+    billing_months = billing_period["months"]
+    current_billing_period = billing_months[-1] if billing_period["basis"] == "billing" and billing_months else None
 
     with get_db_connection() as conn:
         cursor = conn.cursor()
@@ -466,7 +488,7 @@ def get_summary() -> dict[str, Any]:
         )
         totals = cursor.fetchone()
 
-    return {
+    response = {
         "plantName": os.getenv("PLANT_NAME", "KYZ Plant"),
         "lastUpdated": totals.lastUpdated.isoformat() if totals and totals.lastUpdated else None,
         "currentKW": float(latest.kW) if latest and latest.kW is not None else None,
@@ -482,18 +504,53 @@ def get_summary() -> dict[str, Any]:
         "costOf100kwPeakAnnual": annualized_peak_cost(100.0, tariff),
     }
 
+    if billing_anchor is None or current_billing_period is None:
+        response.update(
+            {
+                "billingPeriodStart": None,
+                "billingPeriodEnd": None,
+                "btdKWh": None,
+                "billingEnergyEstimate": None,
+                "currentBillingPeriodTop3AvgKW": None,
+                "currentBillingPeriodBilledDemandKW": None,
+                "billingRatchetFloorKW": None,
+            }
+        )
+        return response
+
+    response.update(
+        {
+            "billingPeriodStart": current_billing_period["periodStart"],
+            "billingPeriodEnd": current_billing_period["periodEnd"],
+            "btdKWh": current_billing_period["energyKWh"],
+            "billingEnergyEstimate": current_billing_period["energyCost"],
+            "currentBillingPeriodTop3AvgKW": current_billing_period["top3AvgKW"],
+            "currentBillingPeriodBilledDemandKW": current_billing_period["billedDemandKW"],
+            "billingRatchetFloorKW": current_billing_period["ratchetFloorKW"],
+        }
+    )
+    return response
+
 
 @app.get("/api/billing")
-def get_billing(months: int = 24) -> dict[str, Any]:
+def get_billing(months: int = 24, basis: str = "calendar") -> dict[str, Any]:
     months = max(12, min(months, 24))
+    requested_basis = basis.strip().lower()
+    if requested_basis not in {"calendar", "billing"}:
+        raise HTTPException(status_code=400, detail="basis must be 'calendar' or 'billing'")
+
+    anchor = get_billing_anchor()
+    effective_basis = "billing" if requested_basis == "billing" and anchor is not None else "calendar"
     tariff = get_tariff_config()
-    key = f"billing:{months}:{tariff}"
+    anchor_key = anchor.isoformat() if anchor else "none"
+    key = f"billing:{months}:{requested_basis}:{effective_basis}:{anchor_key}:{tariff}"
 
     def producer() -> dict[str, Any]:
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(
-                """
+            if effective_basis == "calendar":
+                cursor.execute(
+                    """
                 WITH base AS (
                     SELECT
                         DATEFROMPARTS(YEAR(IntervalEnd), MONTH(IntervalEnd), 1) AS month_start,
@@ -524,14 +581,60 @@ def get_billing(months: int = 24) -> dict[str, Any]:
                 FROM energy e
                 LEFT JOIN top3 t ON t.month_start = e.month_start
                 ORDER BY e.month_start ASC
+                    """,
+                    months,
+                )
+            else:
+                cursor.execute(
+                    """
+                WITH base AS (
+                    SELECT
+                        CASE
+                            WHEN IntervalEnd < DATEADD(month, DATEDIFF(month, ?, IntervalEnd), ?)
+                                THEN DATEADD(month, -1, DATEADD(month, DATEDIFF(month, ?, IntervalEnd), ?))
+                            ELSE DATEADD(month, DATEDIFF(month, ?, IntervalEnd), ?)
+                        END AS period_start,
+                        CAST(kW AS float) AS kW,
+                        CAST(kWh AS float) AS kWh,
+                        ISNULL(R17Exclude,0) AS r17,
+                        ISNULL(KyzInvalidAlarm,0) AS invalid
+                    FROM dbo.KYZ_Interval
+                    WHERE IntervalEnd >= DATEADD(month, -?, GETDATE())
+                ), ranked AS (
+                    SELECT
+                        period_start,
+                        kW,
+                        ROW_NUMBER() OVER (PARTITION BY period_start ORDER BY kW DESC) AS rn
+                    FROM base
+                    WHERE invalid = 0 AND r17 = 0
+                ), top3 AS (
+                    SELECT period_start, AVG(kW) AS top3_avg_kW
+                    FROM ranked
+                    WHERE rn <= 3
+                    GROUP BY period_start
+                ), energy AS (
+                    SELECT period_start, SUM(CASE WHEN invalid = 0 THEN kWh ELSE 0 END) AS energy_kWh
+                    FROM base
+                    GROUP BY period_start
+                )
+                SELECT e.period_start, t.top3_avg_kW, e.energy_kWh
+                FROM energy e
+                LEFT JOIN top3 t ON t.period_start = e.period_start
+                ORDER BY e.period_start ASC
                 """,
-                months,
-            )
+                    anchor,
+                    anchor,
+                    anchor,
+                    anchor,
+                    anchor,
+                    anchor,
+                    months,
+                )
             rows = cursor.fetchall()
 
         source = [
             BillingMonth(
-                month_start=row.month_start,
+                month_start=(row.month_start if hasattr(row, "month_start") else row.period_start.date()),
                 top3_avg_kw=float(row.top3_avg_kW or 0),
                 energy_kwh=float(row.energy_kWh or 0),
             )
@@ -539,7 +642,11 @@ def get_billing(months: int = 24) -> dict[str, Any]:
         ]
         series = compute_billing_series(source, tariff)
 
+        anchor_iso = anchor.date().isoformat() if anchor else None
         return {
+            "basis": effective_basis,
+            "requestedBasis": requested_basis,
+            "anchorDate": anchor_iso,
             "tariff": {
                 "customerCharge": tariff.customer_charge,
                 "demandRatePerKW": tariff.demand_rate_per_kw,
@@ -550,6 +657,12 @@ def get_billing(months: int = 24) -> dict[str, Any]:
             "months": [
                 {
                     "monthStart": row.month_start.isoformat(),
+                    "periodStart": row.month_start.isoformat(),
+                    "periodEnd": (
+                        billing_period_end(datetime.combine(row.month_start, datetime.min.time()), anchor).date().isoformat()
+                        if effective_basis == "billing" and anchor is not None
+                        else add_months_clamped(datetime.combine(row.month_start, datetime.min.time()), 1).date().isoformat()
+                    ),
                     "top3AvgKW": row.top3_avg_kw,
                     "ratchetFloorKW": row.ratchet_floor_kw,
                     "billedDemandKW": row.billed_demand_kw,
