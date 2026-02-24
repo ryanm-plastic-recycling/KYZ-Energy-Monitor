@@ -34,6 +34,9 @@ function getMonitorStatus(health: Health | null): { label: string; cls: 'good' |
 export function DashboardPage() {
   const [summary, setSummary] = useState<Summary | null>(null)
   const [billing, setBilling] = useState<BillingMonth[]>([])
+  const [billingBasis, setBillingBasis] = useState<'calendar' | 'billing'>('calendar')
+  const [billingMode, setBillingMode] = useState<'calendar' | 'billing'>('calendar')
+  const [billingAnchorDate, setBillingAnchorDate] = useState<string | null>(null)
   const [quality, setQuality] = useState<Quality | null>(null)
   const [metrics, setMetrics] = useState<Metrics | null>(null)
   const [health, setHealth] = useState<Health | null>(null)
@@ -48,7 +51,7 @@ export function DashboardPage() {
     const loadFast = async () => {
       const settled = await Promise.allSettled([
         client.summary(),
-        client.billing(24),
+        client.billing(24, billingBasis),
         client.quality(),
         client.metrics(),
         client.health(),
@@ -57,7 +60,11 @@ export function DashboardPage() {
       ])
 
       if (settled[0].status === 'fulfilled') setSummary(settled[0].value)
-      if (settled[1].status === 'fulfilled') setBilling(settled[1].value.months)
+      if (settled[1].status === 'fulfilled') {
+        setBilling(settled[1].value.months)
+        setBillingMode(settled[1].value.basis)
+        setBillingAnchorDate(settled[1].value.anchorDate)
+      }
       if (settled[2].status === 'fulfilled') setQuality(settled[2].value)
       if (settled[3].status === 'fulfilled') setMetrics(settled[3].value)
       if (settled[4].status === 'fulfilled') setHealth(settled[4].value)
@@ -94,7 +101,7 @@ export function DashboardPage() {
     load().catch(() => undefined)
     const t = setInterval(() => load().catch(() => undefined), 15000)
     return () => clearInterval(t)
-  }, [])
+  }, [billingBasis])
 
   const monitorStatus = getMonitorStatus(health)
 
@@ -122,7 +129,7 @@ export function DashboardPage() {
       <Routes>
         <Route path="/" element={<Executive summary={summary} liveSeries30m={liveSeries30m} currentMonthProfile={currentMonthProfile} />} />
         <Route path="/operations" element={<Operations series24h={series24h} metrics={metrics} lastMonthProfile={lastMonthProfile} currentMonthProfile={currentMonthProfile} currentWeekProfile={currentWeekProfile} />} />
-        <Route path="/billing-risk" element={<BillingRisk summary={summary} billing={billing} />} />
+        <Route path="/billing-risk" element={<BillingRisk summary={summary} billing={billing} billingBasis={billingBasis} setBillingBasis={setBillingBasis} billingMode={billingMode} billingAnchorDate={billingAnchorDate} />} />
         <Route path="/data-quality" element={<DataQuality quality={quality} />} />
       </Routes>
     </div>
@@ -153,11 +160,14 @@ function Executive({ summary, liveSeries30m, currentMonthProfile }: { summary: S
     <Card t="Today Peak kW" v={summary?.todayPeakKW.toFixed(2) ?? '—'} />
     <Card t="MTD kWh" v={summary?.mtdKWh.toFixed(0) ?? '—'} />
     <Card t="MTD Energy Est." v={summary ? money(summary.energyEstimateMonth) : '—'} />
+    <Card t="Billing Period kWh (BTD)" v={summary?.btdKWh != null ? summary.btdKWh.toFixed(0) : '—'} />
+    <Card t="Billing Period Energy Est." v={summary?.billingEnergyEstimate != null ? money(summary.billingEnergyEstimate) : '—'} />
     <Card t="Top-3 Avg kW" v={summary?.currentMonthTop3AvgKW.toFixed(2) ?? '—'} />
     <Card t="Ratchet Floor kW" v={summary?.ratchetFloorKW.toFixed(2) ?? '—'} />
     <Card t="Billed Demand kW" v={summary?.billedDemandEstimateKW.toFixed(2) ?? '—'} />
     <Card t="Demand Est. $/month" v={summary ? money(summary.demandEstimateMonth) : '—'} />
     <Card t="Cost of 100 kW Peak" v={summary ? money(summary.costOf100kwPeakAnnual) + '/yr' : '—'} />
+    <Card t="Billing Period" v={summary?.billingPeriodStart && summary?.billingPeriodEnd ? `${summary.billingPeriodStart} → ${summary.billingPeriodEnd}` : '—'} />
     <div className="card chart-card full"><h3>Live kW - Last 30 Minutes</h3><ReactECharts style={{ height: 260 }} option={{ xAxis: { type: 'category', data: liveSeries30m.map((p) => new Date(p.t).toLocaleTimeString()) }, yAxis: { type: 'value', name: 'kW' }, series: [{ type: 'line', data: liveSeries30m.map((p) => p.kW), smooth: true, lineStyle: { color: '#00a3ff' } }] }} /></div>
     <ChartOrPlaceholder title="Current Month kW Profile (15-minute intervals)" data={currentMonthProfile} height={280} xLabel={{ month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }} color="#4c6ef5" />
   </section>
@@ -174,11 +184,19 @@ function Operations({ series24h, metrics, lastMonthProfile, currentMonthProfile,
   </section>
 }
 
-function BillingRisk({ summary, billing }: { summary: Summary | null; billing: BillingMonth[] }) {
+function BillingRisk({ summary, billing, billingBasis, setBillingBasis, billingMode, billingAnchorDate }: { summary: Summary | null; billing: BillingMonth[]; billingBasis: 'calendar' | 'billing'; setBillingBasis: (b: 'calendar' | 'billing') => void; billingMode: 'calendar' | 'billing'; billingAnchorDate: string | null }) {
   return <section className="grid charts">
+    <div className="card full">
+      <h3>Billing Basis</h3>
+      <div style={{ display: 'flex', gap: 8 }}>
+        <button onClick={() => setBillingBasis('calendar')} disabled={billingBasis === 'calendar'}>Calendar Months</button>
+        <button onClick={() => setBillingBasis('billing')} disabled={billingBasis === 'billing'}>Billing Periods</button>
+      </div>
+      <p>{billingMode === 'billing' ? `Using anchored billing periods (anchor: ${billingAnchorDate ?? 'n/a'})` : 'Using calendar month aggregation.'}</p>
+    </div>
     <Card t="Demand Estimate" v={summary ? money(summary.demandEstimateMonth) : '—'} />
     <Card t="Energy Estimate" v={summary ? money(summary.energyEstimateMonth) : '—'} />
-    <div className="card chart-card full"><h3>Ratchet-aware Billing Demand (24 months)</h3><ReactECharts style={{ height: 330 }} option={{ tooltip: { trigger: 'axis' }, legend: { data: ['Top3', 'Ratchet Floor', 'Billed Demand'] }, xAxis: { type: 'category', data: billing.map((m) => m.monthStart.slice(0, 7)) }, yAxis: { type: 'value', name: 'kW' }, series: [{ name: 'Top3', type: 'line', data: billing.map((m) => m.top3AvgKW) }, { name: 'Ratchet Floor', type: 'line', data: billing.map((m) => m.ratchetFloorKW) }, { name: 'Billed Demand', type: 'bar', data: billing.map((m) => m.billedDemandKW) }] }} /></div>
+    <div className="card chart-card full"><h3>Ratchet-aware Billing Demand (24 periods)</h3><ReactECharts style={{ height: 330 }} option={{ tooltip: { trigger: 'axis' }, legend: { data: ['Top3', 'Ratchet Floor', 'Billed Demand'] }, xAxis: { type: 'category', data: billing.map((m) => billingMode === 'billing' ? m.periodStart : m.monthStart.slice(0, 7)) }, yAxis: { type: 'value', name: 'kW' }, series: [{ name: 'Top3', type: 'line', data: billing.map((m) => m.top3AvgKW) }, { name: 'Ratchet Floor', type: 'line', data: billing.map((m) => m.ratchetFloorKW) }, { name: 'Billed Demand', type: 'bar', data: billing.map((m) => m.billedDemandKW) }] }} /></div>
   </section>
 }
 

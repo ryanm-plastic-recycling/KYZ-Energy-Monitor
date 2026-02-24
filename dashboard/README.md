@@ -21,10 +21,10 @@ Self-hosted dashboard stack for KYZ interval data in `dbo.KYZ_Interval`, support
 - `GET /api/latest`
 - `GET /api/series?minutes=240&start=<iso>&end=<iso>`
 - `GET /api/summary`
-- `GET /api/billing?months=24`
+- `GET /api/billing?months=24&basis=calendar|billing`
 - `GET /api/quality`
 - `GET /api/daily`
-- `GET /api/monthly-demand`
+- `GET /api/monthly-demand?months=12&basis=calendar|billing`
 - `GET /api/stream`
 
 Optional API auth remains unchanged: `DASHBOARD_AUTH_TOKEN` can be provided in `X-Auth-Token` header or `?token=` query string.
@@ -69,3 +69,18 @@ Recommended SQL users/permissions:
 - `kyz_dashboard`: `SELECT` only on `dbo.KYZ_Interval` and dashboard views
 
 `GET /api/health` now includes `credentialMode` with value `"ro"` or `"rw"` to indicate which credential set is active, without exposing usernames/passwords.
+
+
+## Billing periods vs calendar months
+
+- `basis=calendar` keeps existing month-start behavior.
+- `basis=billing` uses billing periods anchored by `BILLING_ANCHOR_DATE`.
+- If `BILLING_ANCHOR_DATE` is missing/invalid, billing requests transparently fall back to calendar basis, and billing-period summary fields are returned as `null`.
+
+Set in `.env`:
+
+```env
+BILLING_ANCHOR_DATE=2026-01-17
+```
+
+Tip: choose the billing anchor from the utility bill’s period start date/time (meter-read cycle boundary).

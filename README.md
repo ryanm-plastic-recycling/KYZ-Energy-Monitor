@@ -140,6 +140,7 @@ Optional `.env` settings used by dashboard billing calculations:
 - `TARIFF_ENERGY_RATE_PER_KWH` (default `0.04143`)
 - `TARIFF_RATCHET_PERCENT` (default `0.60`)
 - `TARIFF_MIN_BILLING_KW` (default `50`)
+- `BILLING_ANCHOR_DATE` (optional; `YYYY-MM-DD` or ISO datetime, local naive time)
 - `API_SERIES_MAX_DAYS` (default `60`)
 - `API_ALLOW_EXTENDED_RANGE` (default `false`)
 
@@ -163,3 +164,16 @@ Automation scripts (retained):
 - `scripts/windows/create_taskscheduler_jobs.ps1`
 - `scripts/windows/smoke_test.ps1`
 - `scripts/windows/mqtt_probe.py`
+
+
+## Billing period anchor (utility meter-read cycle)
+
+By default, dashboard billing endpoints use calendar months. Set `BILLING_ANCHOR_DATE` to enable anchored billing periods (for example, 17th to 17th).
+
+How to choose the anchor from a real utility bill:
+- Find the *start* timestamp/date of a billing cycle on the bill (often “Service From”).
+- Use that as `BILLING_ANCHOR_DATE` in local plant time.
+- If your bill only shows dates, use midnight (`YYYY-MM-DD`); if it shows a timestamp, use the full ISO datetime.
+- Keep the anchor stable over time so ratchet history aligns across prior 11 billing periods.
+
+With `BILLING_ANCHOR_DATE` unset, API/UI behavior remains calendar-month based.
