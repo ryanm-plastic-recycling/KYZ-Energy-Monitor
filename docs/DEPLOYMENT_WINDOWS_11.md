@@ -61,3 +61,7 @@ Test-NetConnection your-mqtt-hostname -Port 1883
 ```
 
 Use `scripts/windows/*.ps1` for automated install/task scheduler setup.
+
+Task Scheduler automation also includes:
+- `KYZ-Live15s-Retention` (daily 02:05)
+- `KYZ-MonthlyDemand-Refresh` (daily 02:10)

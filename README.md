@@ -143,6 +143,13 @@ Optional `.env` settings used by dashboard billing calculations:
 - `API_SERIES_MAX_DAYS` (default `7`)
 - `API_ALLOW_EXTENDED_RANGE` (default `false`)
 
+
+## Data retention policy
+
+- `dbo.KYZ_Interval`: kept forever (system of record).
+- `dbo.KYZ_Live15s`: retained for 7 days by scheduled task `KYZ-Live15s-Retention`.
+- `dbo.KYZ_MonthlyDemand`: kept forever as the monthly demand snapshot used for ratchet billing.
+
 ## Operations docs and scripts
 
 - `docs/DEPLOYMENT_WINDOWS_11.md`

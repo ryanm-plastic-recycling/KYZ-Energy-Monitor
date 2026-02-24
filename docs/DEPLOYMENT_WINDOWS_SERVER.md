@@ -38,9 +38,11 @@ cd C:\apps\kyz-energy-monitor
 .\scripts\windows\create_taskscheduler_jobs.ps1 -RunNow
 ```
 
-This creates two startup tasks:
+This creates startup/daily tasks:
 - `KYZ-Ingestor`
 - `KYZ-Dashboard-API`
+- `KYZ-Live15s-Retention` (daily 02:05)
+- `KYZ-MonthlyDemand-Refresh` (daily 02:10)
 
 ## 5) Verify service health
 

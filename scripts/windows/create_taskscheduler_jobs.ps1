@@ -28,6 +28,7 @@ function Register-OrReplaceTask {
 
 $startupTrigger = New-ScheduledTaskTrigger -AtStartup
 $dailyRetentionTrigger = New-ScheduledTaskTrigger -Daily -At 2:05AM
+$dailyMonthlyDemandTrigger = New-ScheduledTaskTrigger -Daily -At 2:10AM
 
 Register-OrReplaceTask -Name 'KYZ-Ingestor' -Exe "$RepoRoot\.venv\Scripts\python.exe" -Arguments 'main.py' -WorkingDir $RepoRoot -TaskUser $TaskUser -Trigger $startupTrigger
 Register-OrReplaceTask -Name 'KYZ-Dashboard-API' -Exe "$RepoRoot\dashboard\api\.venv\Scripts\python.exe" -Arguments '-m uvicorn dashboard.api.app:app --host 0.0.0.0 --port 8080' -WorkingDir $RepoRoot -TaskUser $TaskUser -Trigger $startupTrigger
@@ -38,9 +39,16 @@ $retentionCmd = "\"$RepoRoot\.venv\Scripts\python.exe\" scripts\windows\purge_li
 
 Register-OrReplaceTask -Name 'KYZ-Live15s-Retention' -Exe 'cmd.exe' -Arguments "/c $retentionCmd" -WorkingDir $RepoRoot -TaskUser $TaskUser -Trigger $dailyRetentionTrigger
 
+$monthlyDemandOutLog = "$RepoRoot\logs\KYZ-MonthlyDemand-Refresh.out.log"
+$monthlyDemandErrLog = "$RepoRoot\logs\KYZ-MonthlyDemand-Refresh.err.log"
+$monthlyDemandCmd = "\"$RepoRoot\.venv\Scripts\python.exe\" scripts\windows\refresh_monthly_demand.py 1>>\"$monthlyDemandOutLog\" 2>>\"$monthlyDemandErrLog\""
+
+Register-OrReplaceTask -Name 'KYZ-MonthlyDemand-Refresh' -Exe 'cmd.exe' -Arguments "/c $monthlyDemandCmd" -WorkingDir $RepoRoot -TaskUser $TaskUser -Trigger $dailyMonthlyDemandTrigger
+
 if ($RunNow) {
     Start-ScheduledTask -TaskName 'KYZ-Ingestor'
     Start-ScheduledTask -TaskName 'KYZ-Dashboard-API'
     Start-ScheduledTask -TaskName 'KYZ-Live15s-Retention'
+    Start-ScheduledTask -TaskName 'KYZ-MonthlyDemand-Refresh'
     Write-Host 'Started all tasks.'
 }

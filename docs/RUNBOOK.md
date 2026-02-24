@@ -41,6 +41,13 @@ When kiosk/dashboard shows stale:
    - If `DASHBOARD_AUTH_TOKEN` is set, API calls need header token.
    - Kiosk SSE uses query token in URL (`/api/stream?token=...`).
 
+
+## Data retention policy
+
+- `dbo.KYZ_Interval` is kept forever and is the system of record.
+- `dbo.KYZ_Live15s` is retained for 7 days via `KYZ-Live15s-Retention`.
+- `dbo.KYZ_MonthlyDemand` snapshot rows are kept forever.
+
 ## Common recovery actions
 
 - Restart tasks:
