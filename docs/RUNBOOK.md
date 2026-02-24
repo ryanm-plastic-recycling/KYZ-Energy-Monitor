@@ -45,7 +45,7 @@ When kiosk/dashboard shows stale:
 ## Data retention policy
 
 - `dbo.KYZ_Interval` is kept forever and is the system of record.
-- `dbo.KYZ_Live15s` is retained for 7 days via `KYZ-Live15s-Retention`.
+- `dbo.KYZ_Live15s` is retained for 60 days via `KYZ-Live15s-Retention`.
 - `dbo.KYZ_MonthlyDemand` snapshot rows are kept forever.
 
 ## Common recovery actions

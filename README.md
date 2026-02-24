@@ -140,14 +140,14 @@ Optional `.env` settings used by dashboard billing calculations:
 - `TARIFF_ENERGY_RATE_PER_KWH` (default `0.04143`)
 - `TARIFF_RATCHET_PERCENT` (default `0.60`)
 - `TARIFF_MIN_BILLING_KW` (default `50`)
-- `API_SERIES_MAX_DAYS` (default `7`)
+- `API_SERIES_MAX_DAYS` (default `60`)
 - `API_ALLOW_EXTENDED_RANGE` (default `false`)
 
 
 ## Data retention policy
 
 - `dbo.KYZ_Interval`: kept forever (system of record).
-- `dbo.KYZ_Live15s`: retained for 7 days by scheduled task `KYZ-Live15s-Retention`.
+- `dbo.KYZ_Live15s`: retained for 60 days by scheduled task `KYZ-Live15s-Retention`.
 - `dbo.KYZ_MonthlyDemand`: kept forever as the monthly demand snapshot used for ratchet billing.
 
 ## Operations docs and scripts

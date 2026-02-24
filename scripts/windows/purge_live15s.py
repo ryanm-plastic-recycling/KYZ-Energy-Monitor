@@ -57,7 +57,7 @@ def get_sql_connection_string() -> str:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Purge old rows from dbo.KYZ_Live15s")
-    parser.add_argument("--retention-days", type=int, default=7, help="Rows older than this many days are deleted")
+    parser.add_argument("--retention-days", type=int, default=60, help="Rows older than this many days are deleted")
     parser.add_argument("--batch-size", type=int, default=50000, help="Delete batch size")
     return parser.parse_args()
 

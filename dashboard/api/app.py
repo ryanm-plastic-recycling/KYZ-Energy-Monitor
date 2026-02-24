@@ -91,7 +91,7 @@ def get_tariff_config() -> TariffConfig:
 
 
 def get_series_max_days() -> int:
-    return int(os.getenv("API_SERIES_MAX_DAYS", "7"))
+    return int(os.getenv("API_SERIES_MAX_DAYS", "60"))
 
 
 def get_allow_extended_ranges() -> bool:
@@ -154,7 +154,13 @@ def row_to_live_latest(row: Any) -> dict[str, Any]:
 
 def parse_iso(value: str) -> datetime:
     try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00")).replace(tzinfo=None)
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if parsed.tzinfo is not None:
+            local_tz = datetime.now().astimezone().tzinfo
+            if local_tz is not None:
+                parsed = parsed.astimezone(local_tz)
+            parsed = parsed.replace(tzinfo=None)
+        return parsed
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=f"Invalid datetime: {value}") from exc
 

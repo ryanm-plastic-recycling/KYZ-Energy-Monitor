@@ -1,5 +1,5 @@
 import ReactECharts from 'echarts-for-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { NavLink, Route, Routes } from 'react-router-dom'
 import { client } from './api'
 import type { BillingMonth, Health, IntervalSeriesPoint, LiveSeriesPoint, Metrics, Quality, Summary } from './types'
@@ -25,13 +25,6 @@ function getCurrentWeekRange(base: Date): { start: Date; end: Date } {
   return { start, end }
 }
 
-function filterSeriesRange(data: IntervalSeriesPoint[], start: Date, end: Date): IntervalSeriesPoint[] {
-  return data.filter((point) => {
-    const current = new Date(point.t)
-    return current >= start && current < end
-  })
-}
-
 function getMonitorStatus(health: Health | null): { label: string; cls: 'good' | 'warn' | 'bad' } {
   if (!health?.dbConnected || !health.latestLiveEnd) return { label: 'KYZ Monitor Disconnected', cls: 'bad' }
   if ((health.secondsSinceLatestLive ?? Infinity) > 300) return { label: 'KYZ Monitor Delayed', cls: 'warn' }
@@ -46,13 +39,14 @@ export function DashboardPage() {
   const [health, setHealth] = useState<Health | null>(null)
   const [series24h, setSeries24h] = useState<IntervalSeriesPoint[]>([])
   const [liveSeries30m, setLiveSeries30m] = useState<LiveSeriesPoint[]>([])
-  const [intervalSeriesWindow, setIntervalSeriesWindow] = useState<IntervalSeriesPoint[]>([])
+  const [lastMonthProfile, setLastMonthProfile] = useState<IntervalSeriesPoint[] | null>(null)
+  const [currentMonthProfile, setCurrentMonthProfile] = useState<IntervalSeriesPoint[] | null>(null)
+  const [currentWeekProfile, setCurrentWeekProfile] = useState<IntervalSeriesPoint[] | null>(null)
+  const slowRefreshAtRef = useRef(0)
 
   useEffect(() => {
-    const load = async () => {
-      const now = new Date()
-      const { start: lastMonthStart } = getMonthRange(now, -1)
-      const [s, b, q, m, h, series, liveSeries, extendedSeries] = await Promise.all([
+    const loadFast = async () => {
+      const settled = await Promise.allSettled([
         client.summary(),
         client.billing(24),
         client.quality(),
@@ -60,35 +54,47 @@ export function DashboardPage() {
         client.health(),
         client.series(24 * 60),
         client.liveSeries(30),
-        client.series(90 * 24 * 60, lastMonthStart.toISOString(), now.toISOString()),
       ])
-      setSummary(s)
-      setBilling(b.months)
-      setQuality(q)
-      setMetrics(m)
-      setHealth(h)
-      setSeries24h(series.points)
-      setLiveSeries30m(liveSeries.points)
-      setIntervalSeriesWindow(extendedSeries.points)
+
+      if (settled[0].status === 'fulfilled') setSummary(settled[0].value)
+      if (settled[1].status === 'fulfilled') setBilling(settled[1].value.months)
+      if (settled[2].status === 'fulfilled') setQuality(settled[2].value)
+      if (settled[3].status === 'fulfilled') setMetrics(settled[3].value)
+      if (settled[4].status === 'fulfilled') setHealth(settled[4].value)
+      if (settled[5].status === 'fulfilled') setSeries24h(settled[5].value.points)
+      if (settled[6].status === 'fulfilled') setLiveSeries30m(settled[6].value.points)
     }
+
+    const loadSlow = async () => {
+      const now = new Date()
+      const { start: currentMonthStart } = getMonthRange(now)
+      const { start: lastMonthStart } = getMonthRange(now, -1)
+      const { start: weekStart, end: weekEnd } = getCurrentWeekRange(now)
+
+      const settled = await Promise.allSettled([
+        client.series(24 * 60, lastMonthStart.toISOString(), currentMonthStart.toISOString()),
+        client.series(24 * 60, currentMonthStart.toISOString(), now.toISOString()),
+        client.series(7 * 24 * 60, weekStart.toISOString(), weekEnd.toISOString()),
+      ])
+
+      setLastMonthProfile(settled[0].status === 'fulfilled' ? settled[0].value.points : null)
+      setCurrentMonthProfile(settled[1].status === 'fulfilled' ? settled[1].value.points : null)
+      setCurrentWeekProfile(settled[2].status === 'fulfilled' ? settled[2].value.points : null)
+    }
+
+    const load = async () => {
+      await loadFast()
+      const nowMs = Date.now()
+      if (nowMs - slowRefreshAtRef.current >= 5 * 60 * 1000) {
+        slowRefreshAtRef.current = nowMs
+        await loadSlow()
+      }
+    }
+
     load().catch(() => undefined)
     const t = setInterval(() => load().catch(() => undefined), 15000)
     return () => clearInterval(t)
   }, [])
-
-  const now = useMemo(() => new Date(), [intervalSeriesWindow])
-  const lastMonthProfile = useMemo(() => {
-    const range = getMonthRange(now, -1)
-    return filterSeriesRange(intervalSeriesWindow, range.start, range.end)
-  }, [intervalSeriesWindow, now])
-  const currentMonthProfile = useMemo(() => {
-    const range = getMonthRange(now)
-    return filterSeriesRange(intervalSeriesWindow, range.start, range.end)
-  }, [intervalSeriesWindow, now])
-  const currentWeekProfile = useMemo(() => {
-    const range = getCurrentWeekRange(now)
-    return filterSeriesRange(intervalSeriesWindow, range.start, range.end)
-  }, [intervalSeriesWindow, now])
 
   const monitorStatus = getMonitorStatus(health)
 
@@ -123,7 +129,23 @@ export function DashboardPage() {
   )
 }
 
-function Executive({ summary, liveSeries30m, currentMonthProfile }: { summary: Summary | null; liveSeries30m: LiveSeriesPoint[]; currentMonthProfile: IntervalSeriesPoint[] }) {
+function ChartOrPlaceholder({
+  title,
+  data,
+  height,
+  xLabel,
+  color,
+}: {
+  title: string
+  data: IntervalSeriesPoint[] | null
+  height: number
+  xLabel: Intl.DateTimeFormatOptions
+  color: string
+}) {
+  return <div className="card chart-card full"><h3>{title}</h3>{data ? <ReactECharts style={{ height }} option={{ tooltip: { trigger: 'axis' }, xAxis: { type: 'category', data: data.map((p) => new Date(p.t).toLocaleString(undefined, xLabel)) }, yAxis: { type: 'value', name: 'kW' }, series: [{ type: 'line', data: data.map((p) => p.kW), showSymbol: false, lineStyle: { color } }] }} /> : <p>Data unavailable</p>}</div>
+}
+
+function Executive({ summary, liveSeries30m, currentMonthProfile }: { summary: Summary | null; liveSeries30m: LiveSeriesPoint[]; currentMonthProfile: IntervalSeriesPoint[] | null }) {
   return <section className="grid kpis">
     <Card t="Current kW (15m demand)" v={summary?.currentKW?.toFixed(2) ?? '—'} />
     <Card t="Live kW (15s)" v={summary?.currentKW_15s?.toFixed(2) ?? '—'} />
@@ -137,16 +159,16 @@ function Executive({ summary, liveSeries30m, currentMonthProfile }: { summary: S
     <Card t="Demand Est. $/month" v={summary ? money(summary.demandEstimateMonth) : '—'} />
     <Card t="Cost of 100 kW Peak" v={summary ? money(summary.costOf100kwPeakAnnual) + '/yr' : '—'} />
     <div className="card chart-card full"><h3>Live kW - Last 30 Minutes</h3><ReactECharts style={{ height: 260 }} option={{ xAxis: { type: 'category', data: liveSeries30m.map((p) => new Date(p.t).toLocaleTimeString()) }, yAxis: { type: 'value', name: 'kW' }, series: [{ type: 'line', data: liveSeries30m.map((p) => p.kW), smooth: true, lineStyle: { color: '#00a3ff' } }] }} /></div>
-    <div className="card chart-card full"><h3>Current Month kW Profile (15-minute intervals)</h3><ReactECharts style={{ height: 280 }} option={{ tooltip: { trigger: 'axis' }, xAxis: { type: 'category', data: currentMonthProfile.map((p) => new Date(p.t).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })) }, yAxis: { type: 'value', name: 'kW' }, series: [{ type: 'line', data: currentMonthProfile.map((p) => p.kW), showSymbol: false, lineStyle: { color: '#4c6ef5' } }] }} /></div>
+    <ChartOrPlaceholder title="Current Month kW Profile (15-minute intervals)" data={currentMonthProfile} height={280} xLabel={{ month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }} color="#4c6ef5" />
   </section>
 }
 
-function Operations({ series24h, metrics, lastMonthProfile, currentMonthProfile, currentWeekProfile }: { series24h: IntervalSeriesPoint[]; metrics: Metrics | null; lastMonthProfile: IntervalSeriesPoint[]; currentMonthProfile: IntervalSeriesPoint[]; currentWeekProfile: IntervalSeriesPoint[] }) {
+function Operations({ series24h, metrics, lastMonthProfile, currentMonthProfile, currentWeekProfile }: { series24h: IntervalSeriesPoint[]; metrics: Metrics | null; lastMonthProfile: IntervalSeriesPoint[] | null; currentMonthProfile: IntervalSeriesPoint[] | null; currentWeekProfile: IntervalSeriesPoint[] | null }) {
   return <section className="grid charts">
     <div className="card chart-card full"><h3>kW Profile - Last 24 Hours</h3><ReactECharts style={{ height: 320 }} option={{ xAxis: { type: 'category', data: series24h.map((p) => new Date(p.t).toLocaleTimeString()) }, yAxis: { type: 'value', name: 'kW' }, series: [{ type: 'line', data: series24h.map((p) => p.kW), smooth: true, lineStyle: { color: '#0a3a66' } }] }} /></div>
-    <div className="card chart-card full"><h3>Last Month kW Profile (15-minute intervals)</h3><ReactECharts style={{ height: 300 }} option={{ tooltip: { trigger: 'axis' }, xAxis: { type: 'category', data: lastMonthProfile.map((p) => new Date(p.t).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })) }, yAxis: { type: 'value', name: 'kW' }, series: [{ type: 'line', data: lastMonthProfile.map((p) => p.kW), showSymbol: false, lineStyle: { color: '#228be6' } }] }} /></div>
-    <div className="card chart-card full"><h3>Current Month kW Profile to Date (15-minute intervals)</h3><ReactECharts style={{ height: 300 }} option={{ tooltip: { trigger: 'axis' }, xAxis: { type: 'category', data: currentMonthProfile.map((p) => new Date(p.t).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })) }, yAxis: { type: 'value', name: 'kW' }, series: [{ type: 'line', data: currentMonthProfile.map((p) => p.kW), showSymbol: false, lineStyle: { color: '#5f3dc4' } }] }} /></div>
-    <div className="card chart-card full"><h3>Current Week kW (Monday to Sunday, 15-minute intervals)</h3><ReactECharts style={{ height: 300 }} option={{ tooltip: { trigger: 'axis' }, xAxis: { type: 'category', data: currentWeekProfile.map((p) => new Date(p.t).toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' })) }, yAxis: { type: 'value', name: 'kW' }, series: [{ type: 'line', data: currentWeekProfile.map((p) => p.kW), showSymbol: false, lineStyle: { color: '#0ca678' } }] }} /></div>
+    <ChartOrPlaceholder title="Last Month kW Profile (15-minute intervals)" data={lastMonthProfile} height={300} xLabel={{ month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }} color="#228be6" />
+    <ChartOrPlaceholder title="Current Month kW Profile to Date (15-minute intervals)" data={currentMonthProfile} height={300} xLabel={{ month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }} color="#5f3dc4" />
+    <ChartOrPlaceholder title="Current Week kW (Monday to Sunday, 15-minute intervals)" data={currentWeekProfile} height={300} xLabel={{ weekday: 'short', hour: '2-digit', minute: '2-digit' }} color="#0ca678" />
     <Card t="Rows (24h)" v={String(metrics?.rowCount24h ?? '—')} />
     <Card t="Seconds Since Last Interval" v={String(metrics?.secondsSinceLastInterval ?? '—')} />
   </section>
