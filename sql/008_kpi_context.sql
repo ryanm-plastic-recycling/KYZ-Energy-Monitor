@@ -23,14 +23,20 @@ BEGIN
         AND ISNULL(KyzInvalidAlarm, 0) = 0
       ORDER BY IntervalEnd DESC
   ),
+  pivot_latest AS (
+      SELECT
+          MAX(CASE WHEN rn = 1 THEN kW END) AS current_kw,
+          MAX(CASE WHEN rn = 2 THEN kW END) AS prev_kw
+      FROM latest_two
+  ),
   today_agg AS (
-      SELECT SUM(CAST(kWh AS float)) AS today_kwh
+      SELECT COALESCE(SUM(CAST(kWh AS float)), 0.0) AS today_kwh
       FROM dbo.KYZ_Interval
       WHERE CAST(IntervalEnd AS date) = @today
         AND ISNULL(KyzInvalidAlarm, 0) = 0
   ),
   yday_to_time AS (
-      SELECT SUM(CAST(kWh AS float)) AS yday_kwh_to_time
+      SELECT COALESCE(SUM(CAST(kWh AS float)), 0.0) AS yday_kwh_to_time
       FROM dbo.KYZ_Interval
       WHERE IntervalEnd >= @yesterday_start
         AND IntervalEnd < @yesterday_end
@@ -47,8 +53,8 @@ BEGIN
       GROUP BY CAST(IntervalEnd AS date)
   )
   SELECT
-      MAX(CASE WHEN l2.rn = 1 THEN l2.kW END) AS current_kw,
-      MAX(CASE WHEN l2.rn = 2 THEN l2.kW END) AS prev_kw,
+      pl.current_kw,
+      pl.prev_kw,
       (
           SELECT AVG(CAST(l.kW AS float))
           FROM dbo.KYZ_Live15s l
@@ -64,7 +70,7 @@ BEGIN
             AND ISNULL(i.KyzInvalidAlarm, 0) = 0
             AND ISNULL(i.R17Exclude, 0) = 0
       ) AS max_kw_11mo
-  FROM latest_two l2
+  FROM pivot_latest pl
   CROSS JOIN today_agg ta
   CROSS JOIN yday_to_time yt;
 END;
