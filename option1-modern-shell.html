@@ -1,0 +1,468 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>KYZ Energy Monitor — Option 1 (Modern Dashboard Shell)</title>
+  <style>
+    :root{
+      /* --- Brand tokens (mapped from current repo styles.css) --- */
+      --brand-900:#12263a; /* header */
+      --brand-700:#234768; /* active nav */
+      --brand-500:#3a5f87; /* accent */
+
+      /* --- Data accents --- */
+      --data-blue:#00a3ff;
+      --data-indigo:#4c6ef5;
+      --data-green:#18a566;
+
+      /* --- Neutrals --- */
+      --bg:#eef1f5;
+      --bg2:#f7fbff;
+      --surface:#ffffff;
+      --surface-2:#f6f8fb;
+      --text:#1d2630;
+      --muted:#6c7a8a;
+      --border:rgba(18,38,58,.14);
+      --shadow: 0 12px 28px rgba(18,38,58,.10);
+
+      --good:#1f7a46;
+      --warn:#9a6700;
+      --bad:#a51e1e;
+
+      --r12:12px;
+      --r16:16px;
+      --r20:20px;
+      --gap:14px;
+
+      --font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    }
+
+    *{box-sizing:border-box}
+    html,body{height:100%}
+    body{
+      margin:0;
+      font-family:var(--font);
+      color:var(--text);
+      background:
+        radial-gradient(900px 500px at 10% 0%, rgba(0,163,255,.10), transparent 55%),
+        radial-gradient(900px 500px at 90% -10%, rgba(58,95,135,.14), transparent 50%),
+        linear-gradient(180deg, var(--bg2), var(--bg) 40%, #e6ebf2);
+    }
+
+    .app{
+      min-height:100vh;
+      display:grid;
+      grid-template-columns: 280px 1fr;
+    }
+
+    /* Sidebar */
+    .sidebar{
+      padding:16px;
+      border-right:1px solid var(--border);
+      background: linear-gradient(180deg, rgba(255,255,255,.76), rgba(255,255,255,.66));
+      backdrop-filter: blur(10px);
+      position:sticky;
+      top:0;
+      height:100vh;
+    }
+    .brand{
+      display:flex;
+      gap:12px;
+      align-items:center;
+      padding:12px;
+      border-radius:var(--r16);
+      border:1px solid var(--border);
+      background: linear-gradient(180deg, rgba(18,38,58,.06), rgba(18,38,58,.02));
+      box-shadow: 0 10px 22px rgba(18,38,58,.08);
+    }
+    .logo{
+      width:38px;
+      height:38px;
+      border-radius:12px;
+      background: linear-gradient(135deg, var(--brand-900), var(--brand-500));
+      box-shadow: 0 10px 18px rgba(18,38,58,.18);
+      position:relative;
+      overflow:hidden;
+    }
+    .logo:after{
+      content:"";
+      position:absolute;
+      inset:-30% -60% auto auto;
+      width:120%;
+      height:120%;
+      background: radial-gradient(circle at 30% 30%, rgba(0,163,255,.45), transparent 55%);
+      transform: rotate(18deg);
+    }
+    .brand h1{
+      margin:0;
+      font-size:14px;
+      letter-spacing:.2px;
+    }
+    .brand p{margin:2px 0 0;color:var(--muted);font-size:12px}
+
+    .nav{
+      margin-top:14px;
+      display:flex;
+      flex-direction:column;
+      gap:8px;
+    }
+    .nav a{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      padding:10px 12px;
+      border-radius:14px;
+      text-decoration:none;
+      color: rgba(29,38,48,.80);
+      border:1px solid transparent;
+      background: transparent;
+      font-weight:600;
+    }
+    .nav a:hover{
+      border-color: var(--border);
+      background: rgba(255,255,255,.70);
+    }
+    .nav a.active{
+      color:#fff;
+      background: linear-gradient(135deg, var(--brand-900), var(--brand-700));
+      border-color: rgba(18,38,58,.18);
+      box-shadow: 0 10px 18px rgba(18,38,58,.18);
+    }
+    .tag{
+      font-size:12px;
+      padding:2px 8px;
+      border-radius:999px;
+      border:1px solid var(--border);
+      color: var(--muted);
+      background: rgba(255,255,255,.80);
+    }
+    .nav a.active .tag{border-color: rgba(255,255,255,.22); background: rgba(255,255,255,.14); color: rgba(255,255,255,.90)}
+
+    /* Main */
+    .main{
+      padding:16px 16px 40px;
+    }
+
+    .topbar{
+      display:flex;
+      justify-content:space-between;
+      align-items:flex-start;
+      gap:12px;
+      padding:14px;
+      border-radius:var(--r20);
+      border:1px solid var(--border);
+      background: rgba(255,255,255,.72);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(10px);
+      position:sticky;
+      top:12px;
+      z-index:10;
+    }
+
+    .title h2{margin:0;font-size:16px;letter-spacing:.2px}
+    .title small{color:var(--muted)}
+
+    .chips{display:flex; gap:8px; align-items:center; flex-wrap:wrap; justify-content:flex-end}
+    .chip{
+      display:inline-flex;
+      gap:8px;
+      align-items:center;
+      padding:6px 10px;
+      border-radius:999px;
+      border:1px solid var(--border);
+      background: rgba(255,255,255,.80);
+      font-size:12px;
+      font-weight:700;
+      color: rgba(29,38,48,.82);
+    }
+    .dot{width:8px;height:8px;border-radius:999px}
+    .dot.good{background:var(--good)}
+    .dot.warn{background:var(--warn)}
+    .dot.bad{background:var(--bad)}
+
+    .content{margin-top:14px; display:grid; gap:var(--gap)}
+
+    /* KPI grid */
+    .kpis{
+      display:grid;
+      grid-template-columns: repeat(12, 1fr);
+      gap:var(--gap);
+    }
+    .card{
+      border:1px solid var(--border);
+      border-radius:var(--r20);
+      background: rgba(255,255,255,.78);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(8px);
+    }
+    .kpi{
+      grid-column: span 3;
+      padding:14px;
+      min-height:112px;
+      position:relative;
+      overflow:hidden;
+    }
+    .kpi:before{
+      content:"";
+      position:absolute;
+      inset:-20% -30% auto auto;
+      width:220px;
+      height:220px;
+      background: radial-gradient(circle at 30% 30%, rgba(0,163,255,.16), transparent 55%);
+      transform: rotate(18deg);
+    }
+    .kpi .label{color:var(--muted);font-size:12px;font-weight:700}
+    .kpi .value{margin-top:8px;font-size:26px;font-weight:800;letter-spacing:.2px}
+    .kpi .meta{margin-top:8px;color:var(--muted);font-size:12px;display:flex;gap:8px;align-items:center}
+    .pill{
+      font-size:12px;
+      padding:3px 9px;
+      border-radius:999px;
+      border:1px solid rgba(18,38,58,.12);
+      background: rgba(18,38,58,.04);
+      color: rgba(29,38,48,.78);
+      font-weight:700;
+    }
+    .pill.pos{border-color: rgba(31,122,70,.24); background: rgba(31,122,70,.10); color: var(--good)}
+    .pill.neg{border-color: rgba(165,30,30,.22); background: rgba(165,30,30,.10); color: var(--bad)}
+
+    /* Panels */
+    .panels{
+      display:grid;
+      grid-template-columns: 1.55fr .95fr;
+      gap:var(--gap);
+      align-items:start;
+    }
+    .panel{padding:14px}
+    .panel h3{margin:0;font-size:14px;letter-spacing:.2px;color:var(--brand-500)}
+    .panel p{margin:6px 0 0;color:var(--muted);font-size:12px;line-height:1.5}
+
+    .chart{
+      margin-top:12px;
+      border:1px solid rgba(18,38,58,.10);
+      border-radius:16px;
+      background: linear-gradient(180deg, rgba(247,251,255,.95), rgba(255,255,255,.78));
+      padding:10px;
+      overflow:hidden;
+    }
+
+    /* Simple SVG chart styling */
+    .chart svg{width:100%;height:260px;display:block}
+    .axis{stroke: rgba(18,38,58,.18); stroke-width:1}
+    .gridline{stroke: rgba(18,38,58,.08); stroke-width:1}
+    .line{fill:none; stroke: var(--data-blue); stroke-width:3}
+    .line2{fill:none; stroke: var(--data-indigo); stroke-width:2.5; opacity:.9}
+    .area{fill: rgba(0,163,255,.10)}
+    .label{fill: rgba(29,38,48,.70); font-size:11px}
+
+    /* Table */
+    .table-wrap{
+      margin-top:12px;
+      border:1px solid rgba(18,38,58,.10);
+      border-radius:16px;
+      overflow:hidden;
+      background: rgba(255,255,255,.86);
+    }
+    table{width:100%; border-collapse:separate; border-spacing:0}
+    thead th{
+      text-align:left;
+      padding:12px;
+      font-size:12px;
+      color: rgba(29,38,48,.62);
+      background: rgba(18,38,58,.04);
+      border-bottom:1px solid rgba(18,38,58,.10);
+      position:sticky;
+      top:0;
+      z-index:1;
+    }
+    tbody td{
+      padding:12px;
+      font-size:13px;
+      border-bottom:1px solid rgba(18,38,58,.07);
+      color: rgba(29,38,48,.88);
+      vertical-align:middle;
+    }
+    tbody tr:hover{background: rgba(0,163,255,.06)}
+    .mono{font-family:var(--mono); font-size:12px; color: rgba(29,38,48,.62)}
+    .right{text-align:right}
+
+    /* Responsive */
+    @media (max-width: 1100px){
+      .app{grid-template-columns: 1fr}
+      .sidebar{height:auto; position:relative}
+      .kpi{grid-column: span 6}
+      .panels{grid-template-columns:1fr}
+    }
+    @media (max-width: 560px){
+      .kpi{grid-column: span 12}
+      .chips{justify-content:flex-start}
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="logo" aria-hidden="true"></div>
+        <div>
+          <h1>KYZ Energy Monitor</h1>
+          <p>Plant Energy Dashboard</p>
+        </div>
+      </div>
+
+      <nav class="nav" aria-label="Primary">
+        <a class="active" href="#"><span>Executive</span><span class="tag">KPI</span></a>
+        <a href="#"><span>Operations</span><span class="tag">Trends</span></a>
+        <a href="#"><span>Billing &amp; Risk</span><span class="tag">24 mo</span></a>
+        <a href="#"><span>Data Quality</span><span class="tag">Alerts</span></a>
+        <a href="#"><span>Kiosk</span><span class="tag">TV</span></a>
+      </nav>
+
+      <div style="margin-top:14px; padding:12px; border-radius:16px; border:1px solid var(--border); background: rgba(255,255,255,.70)">
+        <div style="font-size:12px; color:var(--muted); font-weight:800; letter-spacing:.2px">Theme principle</div>
+        <div style="margin-top:8px; font-size:13px; line-height:1.5">
+          Brand stays in navigation + accents. Data gets neutral surfaces and higher contrast.
+        </div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div class="title">
+          <h2>Executive Overview</h2>
+          <small>Plant: <strong>Sample Plant</strong> • Last updated: <strong>02/24/2026 4:15 PM</strong></small>
+        </div>
+        <div class="chips" aria-label="System status">
+          <span class="chip"><span class="dot good"></span>DB Connected</span>
+          <span class="chip"><span class="dot warn"></span>Monitor Delayed</span>
+          <span class="chip"><span class="dot good"></span>Live</span>
+        </div>
+      </header>
+
+      <section class="content">
+        <div class="kpis">
+          <div class="card kpi">
+            <div class="label">Current kW (15m demand)</div>
+            <div class="value">812.4</div>
+            <div class="meta"><span class="pill pos">▲ 3.2%</span><span>vs prior 15m</span></div>
+          </div>
+          <div class="card kpi">
+            <div class="label">Live kW (15s)</div>
+            <div class="value">798.1</div>
+            <div class="meta"><span class="pill">Stable</span><span class="mono">15s cadence</span></div>
+          </div>
+          <div class="card kpi">
+            <div class="label">Today kWh</div>
+            <div class="value">12,904</div>
+            <div class="meta"><span class="pill pos">▲ 6.1%</span><span>vs yesterday</span></div>
+          </div>
+          <div class="card kpi">
+            <div class="label">Today Peak kW</div>
+            <div class="value">1,042</div>
+            <div class="meta"><span class="pill neg">▲ Risk</span><span>approaching ratchet</span></div>
+          </div>
+
+          <div class="card kpi">
+            <div class="label">MTD kWh</div>
+            <div class="value">286,110</div>
+            <div class="meta"><span class="pill">Month-to-date</span><span class="mono">15m intervals</span></div>
+          </div>
+          <div class="card kpi">
+            <div class="label">Demand Est. $/month</div>
+            <div class="value">$24,780</div>
+            <div class="meta"><span class="pill">Ratchet-aware</span><span class="mono">Top-3 avg</span></div>
+          </div>
+          <div class="card kpi">
+            <div class="label">Top-3 Avg kW</div>
+            <div class="value">932.6</div>
+            <div class="meta"><span class="pill">Billed basis</span><span>this month</span></div>
+          </div>
+          <div class="card kpi">
+            <div class="label">Ratchet Floor kW</div>
+            <div class="value">559.6</div>
+            <div class="meta"><span class="pill">60% rule</span><span>typical</span></div>
+          </div>
+        </div>
+
+        <div class="panels">
+          <div class="card panel">
+            <h3>Live kW — last 30 minutes</h3>
+            <p>Cleaner, higher-contrast chart styling. Brand stays in the chrome; data uses a consistent palette.</p>
+            <div class="chart" aria-label="Chart placeholder">
+              <svg viewBox="0 0 900 260" role="img" aria-label="Sample line chart">
+                <!-- grid -->
+                <line class="axis" x1="50" y1="20" x2="50" y2="230" />
+                <line class="axis" x1="50" y1="230" x2="880" y2="230" />
+                <line class="gridline" x1="50" y1="70" x2="880" y2="70" />
+                <line class="gridline" x1="50" y1="120" x2="880" y2="120" />
+                <line class="gridline" x1="50" y1="170" x2="880" y2="170" />
+                <!-- labels -->
+                <text class="label" x="10" y="74">1000</text>
+                <text class="label" x="10" y="124">800</text>
+                <text class="label" x="10" y="174">600</text>
+                <text class="label" x="10" y="234">400</text>
+
+                <!-- area under line -->
+                <path class="area" d="M50 180 L120 165 L190 170 L260 150 L330 145 L400 155 L470 130 L540 125 L610 140 L680 110 L750 118 L820 96 L880 105 L880 230 L50 230 Z"/>
+                <!-- main line -->
+                <path class="line" d="M50 180 L120 165 L190 170 L260 150 L330 145 L400 155 L470 130 L540 125 L610 140 L680 110 L750 118 L820 96 L880 105"/>
+                <!-- comparison line -->
+                <path class="line2" d="M50 190 L120 175 L190 176 L260 160 L330 155 L400 162 L470 142 L540 140 L610 150 L680 126 L750 130 L820 112 L880 120"/>
+
+                <text class="label" x="50" y="252">-30m</text>
+                <text class="label" x="860" y="252">now</text>
+              </svg>
+            </div>
+          </div>
+
+          <div class="card panel">
+            <h3>What changes in this option</h3>
+            <p>
+              This is the lowest-risk modernization: mostly layout + typography + component consistency.
+            </p>
+
+            <div class="table-wrap" aria-label="Recent events table">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Signal</th>
+                    <th>Status</th>
+                    <th class="right">Age</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>DB Connection</td>
+                    <td><span class="chip" style="padding:4px 10px"><span class="dot good"></span>Healthy</span></td>
+                    <td class="right">3m</td>
+                  </tr>
+                  <tr>
+                    <td>KYZ Monitor Stream</td>
+                    <td><span class="chip" style="padding:4px 10px"><span class="dot warn"></span>Delayed</span></td>
+                    <td class="right">7m</td>
+                  </tr>
+                  <tr>
+                    <td>Missing Intervals</td>
+                    <td><span class="chip" style="padding:4px 10px"><span class="dot good"></span>0 last 24h</span></td>
+                    <td class="right">—</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div style="margin-top:12px; padding:12px; border-radius:16px; border:1px solid rgba(18,38,58,.10); background: rgba(18,38,58,.03)">
+              <div style="font-weight:800; font-size:12px; color: rgba(29,38,48,.70)">Implementation note</div>
+              <div style="margin-top:8px; font-size:13px; line-height:1.5; color: rgba(29,38,48,.84)">
+                In your repo this is mostly: <span class="mono">styles.css</span> + adding a <span class="mono">Layout</span> component for sidebar/topbar.
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </section>
+    </main>
+  </div>
+</body>
+</html>

@@ -1,0 +1,453 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>KYZ Energy Monitor — Option 2 (Data Explorer)</title>
+  <style>
+    :root{
+      /* Brand (from repo) */
+      --brand-900:#12263a;
+      --brand-700:#234768;
+      --brand-500:#3a5f87;
+
+      /* Data palette */
+      --blue:#00a3ff;
+      --indigo:#4c6ef5;
+      --green:#1f7a46;
+      --amber:#9a6700;
+      --red:#a51e1e;
+
+      /* Neutrals */
+      --bg:#eef1f5;
+      --surface:#ffffff;
+      --surface-2:#f6f8fb;
+      --text:#1d2630;
+      --muted:#6c7a8a;
+      --border:rgba(18,38,58,.14);
+      --shadow: 0 12px 28px rgba(18,38,58,.10);
+
+      --r12:12px;
+      --r16:16px;
+      --r20:20px;
+      --gap:14px;
+
+      --font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    }
+
+    *{box-sizing:border-box}
+    body{
+      margin:0;
+      font-family:var(--font);
+      color:var(--text);
+      background:
+        radial-gradient(900px 500px at 10% 0%, rgba(0,163,255,.10), transparent 55%),
+        radial-gradient(900px 500px at 90% -10%, rgba(58,95,135,.14), transparent 50%),
+        linear-gradient(180deg, #f7fbff, var(--bg) 40%, #e6ebf2);
+      min-height:100vh;
+    }
+
+    .shell{
+      max-width: 1320px;
+      margin:0 auto;
+      padding:16px;
+      display:grid;
+      grid-template-rows: auto 1fr;
+      gap:var(--gap);
+    }
+
+    .topbar{
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      gap:12px;
+      padding:14px;
+      border-radius:var(--r20);
+      border:1px solid var(--border);
+      background: rgba(255,255,255,.74);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(10px);
+      position:sticky;
+      top:12px;
+      z-index:10;
+    }
+
+    .title h1{margin:0;font-size:16px;letter-spacing:.2px}
+    .title small{color:var(--muted)}
+
+    .actions{display:flex; gap:10px; align-items:center; flex-wrap:wrap; justify-content:flex-end}
+    .search{
+      display:flex; align-items:center; gap:10px;
+      padding:10px 12px;
+      border-radius:14px;
+      border:1px solid rgba(18,38,58,.16);
+      background: rgba(255,255,255,.85);
+      min-width: 320px;
+    }
+    .search input{
+      width:100%;
+      border:0; outline:0;
+      background:transparent;
+      color:var(--text);
+      font-size:13px;
+    }
+    .btn{
+      padding:10px 12px;
+      border-radius:14px;
+      border:1px solid rgba(18,38,58,.16);
+      background: rgba(255,255,255,.85);
+      color: var(--text);
+      cursor:pointer;
+      font-weight:700;
+      font-size:13px;
+    }
+    .btn.primary{
+      border-color: rgba(18,38,58,.20);
+      color:#fff;
+      background: linear-gradient(135deg, var(--brand-900), var(--brand-700));
+      box-shadow: 0 10px 18px rgba(18,38,58,.18);
+    }
+
+    .content{
+      display:grid;
+      grid-template-columns: 340px 1fr;
+      gap:var(--gap);
+      align-items:start;
+    }
+
+    .card{
+      border:1px solid var(--border);
+      border-radius:var(--r20);
+      background: rgba(255,255,255,.78);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(8px);
+      overflow:hidden;
+    }
+
+    /* Filters */
+    .filters{padding:14px}
+    .filters h2{margin:0;font-size:14px;letter-spacing:.2px;color:var(--brand-500)}
+    .filters p{margin:6px 0 0;color:var(--muted);font-size:12px;line-height:1.5}
+
+    .chiprow{margin-top:12px; display:flex; flex-wrap:wrap; gap:8px}
+    .chip{
+      display:inline-flex;
+      align-items:center;
+      gap:8px;
+      font-size:12px;
+      font-weight:800;
+      padding:6px 10px;
+      border-radius:999px;
+      border:1px solid rgba(18,38,58,.12);
+      background: rgba(18,38,58,.04);
+      color: rgba(29,38,48,.80);
+    }
+    .chip strong{color: rgba(29,38,48,.92)}
+
+    .group{margin-top:14px; padding-top:14px; border-top:1px solid rgba(18,38,58,.10)}
+    .group label{display:block; font-size:12px; color:var(--muted); font-weight:800; margin-bottom:8px}
+
+    .field{
+      display:flex; gap:8px; align-items:center;
+      padding:10px 12px;
+      border-radius:14px;
+      border:1px solid rgba(18,38,58,.16);
+      background: rgba(255,255,255,.85);
+    }
+    .field input,.field select{
+      width:100%;
+      border:0; outline:0;
+      background:transparent;
+      color:var(--text);
+      font-size:13px;
+    }
+    .hint{margin-top:8px; font-size:12px; color:var(--muted); line-height:1.5}
+
+    .filters .footer{
+      margin-top:14px;
+      display:flex;
+      gap:10px;
+    }
+
+    /* Table */
+    .tablehead{
+      padding:14px;
+      display:flex;
+      justify-content:space-between;
+      gap:12px;
+      align-items:center;
+      border-bottom:1px solid rgba(18,38,58,.10);
+      background: linear-gradient(180deg, rgba(18,38,58,.03), rgba(255,255,255,.00));
+    }
+    .tablehead h2{margin:0;font-size:14px;letter-spacing:.2px}
+    .meta{color:var(--muted);font-size:12px}
+
+    .toolbar{display:flex; gap:10px; align-items:center; flex-wrap:wrap; justify-content:flex-end}
+    .seg{
+      display:flex;
+      border:1px solid rgba(18,38,58,.16);
+      border-radius:14px;
+      overflow:hidden;
+      background: rgba(255,255,255,.85);
+    }
+    .seg button{
+      border:0;
+      background: transparent;
+      padding:10px 12px;
+      cursor:pointer;
+      font-size:13px;
+      font-weight:800;
+      color: rgba(29,38,48,.70);
+    }
+    .seg button.active{color:#fff; background: linear-gradient(135deg, var(--brand-900), var(--brand-700))}
+
+    .tablewrap{max-height: 520px; overflow:auto}
+    table{width:100%; border-collapse:separate; border-spacing:0}
+    thead th{
+      text-align:left;
+      padding:12px 14px;
+      font-size:12px;
+      color: rgba(29,38,48,.62);
+      background: rgba(255,255,255,.92);
+      border-bottom:1px solid rgba(18,38,58,.10);
+      position:sticky;
+      top:0;
+      z-index:1;
+    }
+    tbody td{
+      padding:12px 14px;
+      font-size:13px;
+      border-bottom:1px solid rgba(18,38,58,.07);
+      color: rgba(29,38,48,.88);
+      vertical-align:middle;
+    }
+    tbody tr:hover{background: rgba(0,163,255,.06)}
+
+    .mono{font-family:var(--mono); font-size:12px; color: rgba(29,38,48,.62)}
+    .right{text-align:right}
+
+    .pill{
+      display:inline-flex;
+      align-items:center;
+      gap:8px;
+      padding:4px 10px;
+      border-radius:999px;
+      border:1px solid rgba(18,38,58,.12);
+      background: rgba(18,38,58,.04);
+      font-size:12px;
+      font-weight:800;
+      color: rgba(29,38,48,.78);
+    }
+    .dot{width:8px;height:8px;border-radius:999px}
+    .dot.g{background:var(--green)}
+    .dot.w{background:var(--amber)}
+    .dot.r{background:var(--red)}
+
+    /* Row preview drawer (static mock) */
+    .drawer{
+      border-top:1px solid rgba(18,38,58,.10);
+      padding:14px;
+      background: rgba(18,38,58,.02);
+      display:grid;
+      grid-template-columns: 1fr;
+      gap:12px;
+    }
+    .drawer h3{margin:0;font-size:13px;letter-spacing:.2px;color:var(--brand-500)}
+    .kvgrid{display:grid; grid-template-columns: 1fr 1fr; gap:10px}
+    .kv{
+      border:1px solid rgba(18,38,58,.12);
+      border-radius:14px;
+      padding:10px 12px;
+      background: rgba(255,255,255,.75);
+    }
+    .kv .k{font-size:12px;color:var(--muted);font-weight:800}
+    .kv .v{margin-top:6px;font-size:13px; font-weight:700}
+
+    @media (max-width: 1050px){
+      .content{grid-template-columns:1fr}
+      .search{min-width: 220px}
+      .kvgrid{grid-template-columns:1fr}
+    }
+    @media (max-width: 560px){
+      .search{display:none}
+      .topbar{align-items:flex-start}
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <div class="title">
+        <h1>Operations — Interval Data Explorer</h1>
+        <small>Designed for audits, troubleshooting, and “why did demand spike?” questions.</small>
+      </div>
+      <div class="actions">
+        <div class="search" role="search">
+          <span style="opacity:.7">⌕</span>
+          <input value="ACC-01944 OR kyzInvalidAlarm:true" aria-label="Search" />
+        </div>
+        <button class="btn">Export CSV</button>
+        <button class="btn primary">Save View</button>
+      </div>
+    </header>
+
+    <main class="content">
+      <aside class="card filters" aria-label="Filters">
+        <h2>Filters</h2>
+        <p>Data-friendly = predictable filters, compact tables, and row-level drill-in without losing the brand.</p>
+
+        <div class="chiprow" aria-label="Applied filters">
+          <span class="chip"><strong>Range:</strong> Last 24h</span>
+          <span class="chip"><strong>Flags:</strong> Exclude+Alarm</span>
+          <span class="chip"><strong>Interval:</strong> 15m</span>
+        </div>
+
+        <div class="group">
+          <label>Date range</label>
+          <div class="field">
+            <input value="Last 24 hours" />
+          </div>
+          <div class="hint">In-app this becomes a real calendar picker.</div>
+        </div>
+
+        <div class="group">
+          <label>Flags</label>
+          <div class="field">
+            <select>
+              <option>All</option>
+              <option selected>r17Exclude OR kyzInvalidAlarm</option>
+              <option>r17Exclude only</option>
+              <option>kyzInvalidAlarm only</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="group">
+          <label>kW threshold</label>
+          <div class="field">
+            <input value="> 950" />
+          </div>
+          <div class="hint">Useful for finding demand-driving intervals quickly.</div>
+        </div>
+
+        <div class="group">
+          <label>Sort</label>
+          <div class="field">
+            <select>
+              <option>Newest first</option>
+              <option selected>Highest kW first</option>
+              <option>Highest kWh first</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="footer">
+          <button class="btn" style="flex:1">Clear</button>
+          <button class="btn primary" style="flex:1">Apply</button>
+        </div>
+      </aside>
+
+      <section class="card" aria-label="Results">
+        <div class="tablehead">
+          <div>
+            <h2>Intervals</h2>
+            <div class="meta">Showing 50 of 5,760 • Click a row to open details</div>
+          </div>
+          <div class="toolbar">
+            <div class="seg" role="tablist" aria-label="Density">
+              <button class="active" role="tab">Compact</button>
+              <button role="tab">Comfort</button>
+            </div>
+            <button class="btn">Columns</button>
+          </div>
+        </div>
+
+        <div class="tablewrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Interval End</th>
+                <th class="right">kW</th>
+                <th class="right">kWh</th>
+                <th class="right">Pulse Δ</th>
+                <th>Flags</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>2026-02-24 15:15</td>
+                <td class="right"><strong>1,041.8</strong></td>
+                <td class="right">260.4</td>
+                <td class="right"><span class="mono">d=12,804</span></td>
+                <td>
+                  <span class="pill"><span class="dot w"></span>r17Exclude</span>
+                </td>
+              </tr>
+              <tr>
+                <td>2026-02-24 15:00</td>
+                <td class="right"><strong>1,012.2</strong></td>
+                <td class="right">253.1</td>
+                <td class="right"><span class="mono">d=12,446</span></td>
+                <td>
+                  <span class="pill"><span class="dot r"></span>kyzInvalidAlarm</span>
+                </td>
+              </tr>
+              <tr>
+                <td>2026-02-24 14:45</td>
+                <td class="right"><strong>980.7</strong></td>
+                <td class="right">245.2</td>
+                <td class="right"><span class="mono">d=12,088</span></td>
+                <td>
+                  <span class="pill"><span class="dot g"></span>OK</span>
+                </td>
+              </tr>
+              <tr>
+                <td>2026-02-24 14:30</td>
+                <td class="right"><strong>962.4</strong></td>
+                <td class="right">240.6</td>
+                <td class="right"><span class="mono">d=11,862</span></td>
+                <td>
+                  <span class="pill"><span class="dot g"></span>OK</span>
+                </td>
+              </tr>
+              <tr>
+                <td>2026-02-24 14:15</td>
+                <td class="right"><strong>955.9</strong></td>
+                <td class="right">239.0</td>
+                <td class="right"><span class="mono">d=11,782</span></td>
+                <td>
+                  <span class="pill"><span class="dot g"></span>OK</span>
+                </td>
+              </tr>
+              <tr>
+                <td>2026-02-24 14:00</td>
+                <td class="right"><strong>942.1</strong></td>
+                <td class="right">235.5</td>
+                <td class="right"><span class="mono">d=11,610</span></td>
+                <td>
+                  <span class="pill"><span class="dot w"></span>r17Exclude</span>
+                  <span class="pill"><span class="dot r"></span>kyzInvalidAlarm</span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="drawer" aria-label="Row preview">
+          <h3>Row Details (Drill-in Drawer Pattern)</h3>
+          <div class="kvgrid">
+            <div class="kv"><div class="k">Interval end</div><div class="v">2026-02-24 15:15</div></div>
+            <div class="kv"><div class="k">Computed</div><div class="v">kW=1041.8 • kWh=260.4</div></div>
+            <div class="kv"><div class="k">Flags</div><div class="v">r17Exclude=true • kyzInvalidAlarm=false</div></div>
+            <div class="kv"><div class="k">Notes</div><div class="v">This is a demand-driving interval.</div></div>
+          </div>
+          <div style="font-size:12px; color:var(--muted); line-height:1.5">
+            In your React app, this is just a new route/page + a table component. No backend change required because you already have interval-series endpoints.
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+</body>
+</html>
