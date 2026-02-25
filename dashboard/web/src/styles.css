@@ -15,13 +15,13 @@ html[data-theme='dark'] {
   --border: rgba(200, 215, 235, 0.14);
   --text: #eaf2ff;
   --muted: #a7b5c9;
-  --brand: #234768;
-  --brand2: #3a5f87;
+  --brand: rgb(37,64,143);
+  --brand2: rgb(37,64,143);
   --good: #3ecf8e;
   --warn: #f6b01e;
   --bad: #ff5a5f;
   --shadow: 0 18px 36px rgba(0, 0, 0, 0.42);
-  --chart1: #00a3ff;
+  --chart1: rgb(37,64,143);
   --chart2: #3ecf8e;
   --chart3: #88a6ff;
   --chart4: #f6b01e;
@@ -78,17 +78,46 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: var(--space-3);
+  gap: 24px;
   box-shadow: var(--shadow);
   backdrop-filter: blur(8px);
 }
 
-.brand-cluster { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
-.header h1 { margin: 0; font-size: 1.22rem; font-weight: 760; }
-.header small { color: var(--muted); font-size: 0.84rem; }
+.headerLeft {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+}
 
-.logo-row { display: flex; align-items: center; gap: var(--space-2); }
-.brand-logo { width: auto; height: 24px; max-width: 84px; object-fit: contain; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); padding: 2px; }
+.headerRight {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+}
+
+.headerTitleBlock { min-width: 0; }
+.header h1 { margin: 0; font-size: 1.22rem; font-weight: 760; }
+
+.priLogoImg {
+  height: 72px;
+  width: auto;
+  object-fit: contain;
+  padding: 6px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+}
+
+.innovLogoImg {
+  height: 64px;
+  width: auto;
+  object-fit: contain;
+  padding: 6px 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  opacity: 0.95;
+}
 
 .topnav {
   display: flex;
@@ -178,11 +207,23 @@ tbody tr.selected { background: color-mix(in srgb, var(--surface2) 55%, var(--br
 .preview-grid { display: grid; gap: 6px; font-size: 0.88rem; }
 .error-banner { padding: 8px 10px; background: color-mix(in srgb, var(--bad) 12%, var(--surface)); color: var(--bad); border-bottom: 1px solid var(--border); }
 
+@media (max-width: 1100px) {
+  .priLogoImg { height: 60px; }
+  .innovLogoImg { height: 52px; }
+}
+
+@media (max-width: 700px) {
+  .priLogoImg { height: 48px; }
+  .innovLogoImg { height: 40px; }
+}
+
 @media (max-width: 1200px) {
   .kpi-card { grid-column: span 4; }
 }
 @media (max-width: 900px) {
   .header { flex-direction: column; align-items: flex-start; }
+  .headerLeft, .headerRight { width: 100%; }
+  .headerRight { justify-content: flex-start; }
   .pills { justify-content: flex-start; }
   .kpi-card { grid-column: span 6; }
   .charts { grid-template-columns: 1fr; }

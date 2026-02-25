@@ -1,6 +1,7 @@
 import ReactECharts from 'echarts-for-react'
 import { useEffect, useMemo, useState } from 'react'
 import { client } from './api'
+import { INNOV_LOGO_SRC, PRI_LOGO_SRC } from './brand'
 import { buildChartOption } from './chartTheme'
 import { applyTheme, getInitialTheme, type ThemeMode } from './theme'
 import type { Health, IntervalSeriesPoint, LatestRow, LiveLatestRow, LiveSeriesPoint } from './types'
@@ -20,17 +21,6 @@ function getMonitorStatus(health: Health | null): { label: string; cls: 'good' |
   if (!health?.dbConnected || !health.latestLiveEnd) return { label: 'KYZ Monitor Disconnected', cls: 'bad' }
   if ((health.secondsSinceLatestLive ?? Infinity) > 300) return { label: 'KYZ Monitor Delayed', cls: 'warn' }
   return { label: 'KYZ Monitor Connected', cls: 'good' }
-}
-
-function HeaderLogos() {
-  const priLogo = import.meta.env.VITE_PRI_LOGO_URL
-  const innovationLogo = import.meta.env.VITE_INNOVATION_LOGO_URL
-  return (
-    <div className="logo-row">
-      {priLogo ? <img src={priLogo} alt="PRI logo" className="brand-logo" /> : null}
-      {innovationLogo ? <img src={innovationLogo} alt="Innovation Team logo" className="brand-logo" /> : null}
-    </div>
-  )
 }
 
 export function KioskPage() {
@@ -94,19 +84,22 @@ export function KioskPage() {
   return (
     <div className="kiosk page">
       <header className="header">
-        <div className="brand-cluster">
-          <div>
+        <div className="headerLeft">
+          <img className="priLogoImg" src={PRI_LOGO_SRC} alt="PRI Logo" />
+          <div className="headerTitleBlock">
             <h1>Plant Energy Dashboard - Kiosk</h1>
-            <small>Operations display</small>
+            <div className="muted">Operations display</div>
           </div>
-          <HeaderLogos />
         </div>
-        <div className="pills">
-          <span className={`pill ${stale ? 'bad' : 'good'}`}><span className={`dot ${stale ? 'bad' : 'good'}`} />{stale ? 'STALE' : 'LIVE'}</span>
-          <span className={`pill ${monitorStatus.cls}`}><span className={`dot ${monitorStatus.cls}`} />{monitorStatus.label}</span>
-          <span className="pill">{health?.latestIntervalEnd ? new Date(health.latestIntervalEnd).toLocaleString() : 'No data'}</span>
+        <div className="headerRight">
+          <img className="innovLogoImg" src={INNOV_LOGO_SRC} alt="Innovation Team" />
         </div>
       </header>
+      <div className="pills">
+        <span className={`pill ${stale ? 'bad' : 'good'}`}><span className={`dot ${stale ? 'bad' : 'good'}`} />{stale ? 'STALE' : 'LIVE'}</span>
+        <span className={`pill ${monitorStatus.cls}`}><span className={`dot ${monitorStatus.cls}`} />{monitorStatus.label}</span>
+        <span className="pill">{health?.latestIntervalEnd ? new Date(health.latestIntervalEnd).toLocaleString() : 'No data'}</span>
+      </div>
       <section className="grid kpis kiosk-kpis">
         <div className="card kpi-card"><h3>Live kW (15s)</h3><p>{liveLatest?.kW?.toFixed(2) ?? '—'}</p></div>
         <div className="card kpi-card"><h3>Current kW (15m demand)</h3><p>{latest?.kW?.toFixed(2) ?? '—'}</p></div>
