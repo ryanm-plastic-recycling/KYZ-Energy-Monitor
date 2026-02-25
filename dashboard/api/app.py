@@ -446,10 +446,21 @@ def get_monthly_demand(months: int = 12, basis: str = "calendar") -> dict[str, A
     }
 @app.get("/api/summary")
 def get_summary() -> dict[str, Any]:
+    def pct_change(current: float | None, baseline: float | None) -> float | None:
+        if current is None or baseline is None or baseline == 0:
+            return None
+        return ((current - baseline) / baseline) * 100.0
+
+    def pace_pct(actual: float | None, expected: float | None) -> float | None:
+        if actual is None or expected is None or expected == 0:
+            return None
+        return (actual / expected) * 100.0
+
     tariff = get_tariff_config()
     billing = get_billing(24, basis="calendar")
     months = billing["months"]
     current_month = months[-1] if months else None
+    last_month = months[-2] if len(months) > 1 else None
     billing_anchor = get_billing_anchor()
     billing_period = get_billing(24, basis="billing")
     billing_months = billing_period["months"]
@@ -488,20 +499,117 @@ def get_summary() -> dict[str, Any]:
         )
         totals = cursor.fetchone()
 
+        cursor.execute(
+            """
+            SELECT TOP 2 IntervalEnd, CAST(kW AS float) AS kW
+            FROM dbo.KYZ_Interval
+            WHERE kW IS NOT NULL AND ISNULL(KyzInvalidAlarm,0)=0
+            ORDER BY IntervalEnd DESC
+            """
+        )
+        latest_two = cursor.fetchall()
+
+        cursor.execute(
+            """
+            SELECT AVG(CAST(kW AS float)) AS avg_kw_5m
+            FROM dbo.KYZ_Live15s
+            WHERE SampleEnd >= DATEADD(minute, -5, GETDATE())
+            """
+        )
+        live_avg_5m_row = cursor.fetchone()
+
+        cursor.execute(
+            """
+            DECLARE @yesterday_start datetime = DATEADD(day, -1, CAST(GETDATE() AS date));
+            DECLARE @seconds_since_midnight int = DATEDIFF(second, CAST(GETDATE() AS date), GETDATE());
+            DECLARE @yesterday_end datetime = DATEADD(second, @seconds_since_midnight, @yesterday_start);
+
+            SELECT SUM(CAST(kWh AS float)) AS yday_kwh_to_time
+            FROM dbo.KYZ_Interval
+            WHERE IntervalEnd >= @yesterday_start
+              AND IntervalEnd < @yesterday_end
+              AND ISNULL(KyzInvalidAlarm,0)=0
+            """
+        )
+        yday_to_time_row = cursor.fetchone()
+
+        cursor.execute(
+            """
+            WITH daily AS (
+                SELECT
+                    CAST(IntervalEnd AS date) AS d,
+                    SUM(CAST(kWh AS float)) AS daily_kwh
+                FROM dbo.KYZ_Interval
+                WHERE IntervalEnd >= DATEADD(day, -30, CAST(GETDATE() AS date))
+                  AND IntervalEnd < CAST(GETDATE() AS date)
+                  AND ISNULL(KyzInvalidAlarm,0)=0
+                GROUP BY CAST(IntervalEnd AS date)
+            )
+            SELECT AVG(daily_kwh) AS avg_daily_kwh_30d
+            FROM daily
+            """
+        )
+        avg_daily_row = cursor.fetchone()
+
+        cursor.execute(
+            """
+            SELECT MAX(CAST(kW AS float)) AS max_kw
+            FROM dbo.KYZ_Interval
+            WHERE IntervalEnd >= DATEADD(month, -11, CAST(GETDATE() AS date))
+              AND ISNULL(KyzInvalidAlarm,0)=0
+              AND ISNULL(R17Exclude,0)=0
+            """
+        )
+        max_11mo_row = cursor.fetchone()
+
+    latest_kw = float(latest.kW) if latest and latest.kW is not None else None
+    latest_live_kw = float(latest_live.kW) if latest_live and latest_live.kW is not None else None
+    today_kwh = float(totals.todayKwh or 0)
+    today_peak_kw = float(totals.todayPeakKw or 0)
+    mtd_kwh = float(totals.mtdKwh or 0)
+
+    current_kw_valid = float(latest_two[0].kW) if len(latest_two) > 0 and latest_two[0].kW is not None else None
+    prev_kw_valid = float(latest_two[1].kW) if len(latest_two) > 1 and latest_two[1].kW is not None else None
+    live_kw_avg_5m = float(live_avg_5m_row.avg_kw_5m) if live_avg_5m_row and live_avg_5m_row.avg_kw_5m is not None else None
+    yday_kwh_to_time = float(yday_to_time_row.yday_kwh_to_time) if yday_to_time_row and yday_to_time_row.yday_kwh_to_time is not None else None
+    avg_daily_kwh_30d = float(avg_daily_row.avg_daily_kwh_30d) if avg_daily_row and avg_daily_row.avg_daily_kwh_30d is not None else None
+    max_kw_11mo = float(max_11mo_row.max_kw) if max_11mo_row and max_11mo_row.max_kw is not None else None
+
+    expected_mtd = avg_daily_kwh_30d * datetime.now().day if avg_daily_kwh_30d is not None else None
+    last_month_top3 = float(last_month["top3AvgKW"]) if last_month and last_month.get("top3AvgKW") is not None else None
+    last_month_billed = float(last_month["billedDemandKW"]) if last_month and last_month.get("billedDemandKW") is not None else None
+    last_month_demand_cost = float(last_month["demandCost"]) if last_month and last_month.get("demandCost") is not None else None
+
     response = {
         "plantName": os.getenv("PLANT_NAME", "KYZ Plant"),
         "lastUpdated": totals.lastUpdated.isoformat() if totals and totals.lastUpdated else None,
-        "currentKW": float(latest.kW) if latest and latest.kW is not None else None,
-        "currentKW_15s": float(latest_live.kW) if latest_live and latest_live.kW is not None else None,
-        "todayKWh": float(totals.todayKwh or 0),
-        "todayPeakKW": float(totals.todayPeakKw or 0),
-        "mtdKWh": float(totals.mtdKwh or 0),
-        "energyEstimateMonth": float((totals.mtdKwh or 0) * tariff.energy_rate_per_kwh),
+        "currentKW": latest_kw,
+        "currentKW_15s": latest_live_kw,
+        "todayKWh": today_kwh,
+        "todayPeakKW": today_peak_kw,
+        "mtdKWh": mtd_kwh,
+        "energyEstimateMonth": float(mtd_kwh * tariff.energy_rate_per_kwh),
         "currentMonthTop3AvgKW": current_month["top3AvgKW"] if current_month else 0,
         "ratchetFloorKW": current_month["ratchetFloorKW"] if current_month else tariff.min_billing_kw,
         "billedDemandEstimateKW": current_month["billedDemandKW"] if current_month else tariff.min_billing_kw,
         "demandEstimateMonth": current_month["demandCost"] if current_month else tariff.min_billing_kw * tariff.demand_rate_per_kw,
         "costOf100kwPeakAnnual": annualized_peak_cost(100.0, tariff),
+        "currentKWPrev15m": prev_kw_valid,
+        "currentKWPctVsPrev15m": pct_change(current_kw_valid, prev_kw_valid),
+        "liveKWAvg5m": live_kw_avg_5m,
+        "liveKWPctVs5mAvg": pct_change(latest_live_kw, live_kw_avg_5m),
+        "yesterdayKWhToTime": yday_kwh_to_time,
+        "todayKWhPctVsYesterdayToTime": pct_change(today_kwh, yday_kwh_to_time),
+        "avgDailyKWh30d": avg_daily_kwh_30d,
+        "mtdKWhPacePctVs30dAvg": pace_pct(mtd_kwh, expected_mtd),
+        "maxIntervalKW11mo": max_kw_11mo,
+        "todayPeakPctOf11moMax": pace_pct(today_peak_kw, max_kw_11mo),
+        "lastMonthTop3AvgKW": last_month_top3,
+        "top3AvgPctVsLastMonth": pct_change(current_month["top3AvgKW"] if current_month else None, last_month_top3),
+        "lastMonthBilledDemandKW": last_month_billed,
+        "billedDemandPctVsLastMonth": pct_change(current_month["billedDemandKW"] if current_month else None, last_month_billed),
+        "lastMonthDemandCost": last_month_demand_cost,
+        "demandCostPctVsLastMonth": pct_change(current_month["demandCost"] if current_month else None, last_month_demand_cost),
     }
 
     if billing_anchor is None or current_billing_period is None:

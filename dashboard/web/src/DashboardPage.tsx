@@ -5,6 +5,8 @@ import { client } from './api'
 import { INNOV_LOGO_SRC, PRI_LOGO_SRC } from './brand'
 import { buildChartOption } from './chartTheme'
 import { DataExplorerPage } from './DataExplorerPage'
+import { KpiTile } from './KpiTile'
+import { formatPct, toneFromDelta } from './kpiMeta'
 import { applyTheme, getInitialTheme, setStoredTheme, type ThemeMode } from './theme'
 import type { BillingMonth, Health, IntervalSeriesPoint, LiveSeriesPoint, Metrics, Quality, Summary } from './types'
 
@@ -165,19 +167,86 @@ export function DashboardPage() {
 }
 
 function Executive({ summary, liveSeries30m, currentMonthProfile }: { summary: Summary | null; liveSeries30m: LiveSeriesPoint[]; currentMonthProfile: IntervalSeriesPoint[] | null }) {
+  const billingPeriodText = summary?.billingPeriodStart && summary?.billingPeriodEnd
+    ? `${new Date(summary.billingPeriodStart).toLocaleDateString()} → ${new Date(summary.billingPeriodEnd).toLocaleDateString()}`
+    : 'billing basis not configured'
+  const peakPct = summary?.todayPeakPctOf11moMax
+  const headroomPct = peakPct != null ? Math.max(0, 100 - peakPct) : null
+  const billedDemandVsRatchet = summary != null && Math.abs(summary.billedDemandEstimateKW - summary.ratchetFloorKW) < 0.01
+
   return <section className="grid kpis">
-    <Card t="Current kW (15m demand)" v={summary?.currentKW?.toFixed(2) ?? '—'} />
-    <Card t="Live kW (15s)" v={summary?.currentKW_15s?.toFixed(2) ?? '—'} />
-    <Card t="Today kWh" v={summary?.todayKWh.toFixed(2) ?? '—'} />
-    <Card t="Today Peak kW" v={summary?.todayPeakKW.toFixed(2) ?? '—'} />
-    <Card t="MTD kWh" v={summary?.mtdKWh.toFixed(0) ?? '—'} />
-    <Card t="MTD Energy Est." v={summary ? money(summary.energyEstimateMonth) : '—'} />
-    <Card t="Billing Period kWh (BTD)" v={summary?.btdKWh != null ? summary.btdKWh.toFixed(0) : '—'} />
-    <Card t="Billing Period Energy Est." v={summary?.billingEnergyEstimate != null ? money(summary.billingEnergyEstimate) : '—'} />
-    <Card t="Top-3 Avg kW" v={summary?.currentMonthTop3AvgKW.toFixed(2) ?? '—'} />
-    <Card t="Ratchet Floor kW" v={summary?.ratchetFloorKW.toFixed(2) ?? '—'} />
-    <Card t="Billed Demand kW" v={summary?.billedDemandEstimateKW.toFixed(2) ?? '—'} />
-    <Card t="Demand Est. $/month" v={summary ? money(summary.demandEstimateMonth) : '—'} />
+    <KpiTile
+      title="Current kW (15m demand)"
+      value={summary?.currentKW?.toFixed(2) ?? '—'}
+      metaPillText={summary?.currentKWPctVsPrev15m != null ? formatPct(summary.currentKWPctVsPrev15m) : undefined}
+      metaText="vs prior 15m"
+      metaTone={toneFromDelta(summary?.currentKWPctVsPrev15m, true)}
+    />
+    <KpiTile
+      title="Live kW (15s)"
+      value={summary?.currentKW_15s?.toFixed(2) ?? '—'}
+      metaPillText={summary?.liveKWPctVs5mAvg != null ? (Math.abs(summary.liveKWPctVs5mAvg) <= 1 ? 'Stable' : formatPct(summary.liveKWPctVs5mAvg)) : undefined}
+      metaText="vs 5m avg • 15s cadence"
+      metaTone={summary?.liveKWPctVs5mAvg != null ? (Math.abs(summary.liveKWPctVs5mAvg) <= 1 ? 'neutral' : 'warn') : 'neutral'}
+    />
+    <KpiTile
+      title="Today kWh"
+      value={summary?.todayKWh.toFixed(2) ?? '—'}
+      metaPillText={summary?.todayKWhPctVsYesterdayToTime != null ? formatPct(summary.todayKWhPctVsYesterdayToTime) : undefined}
+      metaText="vs yesterday (to this time)"
+      metaTone={toneFromDelta(summary?.todayKWhPctVsYesterdayToTime, true)}
+    />
+    <KpiTile
+      title="Today Peak kW"
+      value={summary?.todayPeakKW.toFixed(2) ?? '—'}
+      metaPillText={peakPct != null ? (peakPct >= 95 ? `Risk ${peakPct.toFixed(1)}%` : peakPct >= 90 ? `Watch ${peakPct.toFixed(1)}%` : `Headroom ${(headroomPct ?? 0).toFixed(1)}%`) : undefined}
+      metaText="relative to 11-month max"
+      metaTone={peakPct != null ? (peakPct >= 95 ? 'bad' : peakPct >= 90 ? 'warn' : 'neutral') : 'neutral'}
+    />
+    <KpiTile
+      title="MTD kWh"
+      value={summary?.mtdKWh.toFixed(0) ?? '—'}
+      metaPillText={summary?.mtdKWhPacePctVs30dAvg != null ? `${summary.mtdKWhPacePctVs30dAvg.toFixed(1)}% pace` : undefined}
+      metaText="vs 30-day avg pace"
+      metaTone={summary?.mtdKWhPacePctVs30dAvg != null ? (summary.mtdKWhPacePctVs30dAvg > 100 ? 'warn' : 'good') : 'neutral'}
+    />
+    <KpiTile
+      title="MTD Energy Est."
+      value={summary ? money(summary.energyEstimateMonth) : '—'}
+      metaPillText={summary?.mtdKWhPacePctVs30dAvg != null ? `${summary.mtdKWhPacePctVs30dAvg.toFixed(1)}% pace` : undefined}
+      metaText="vs 30-day avg pace"
+      metaTone={summary?.mtdKWhPacePctVs30dAvg != null ? (summary.mtdKWhPacePctVs30dAvg > 100 ? 'warn' : 'good') : 'neutral'}
+    />
+    <KpiTile title="Billing Period kWh (BTD)" value={summary?.btdKWh != null ? summary.btdKWh.toFixed(0) : '—'} metaPillText="Billing-to-date" metaText={billingPeriodText} metaTone={summary?.billingPeriodStart ? 'neutral' : 'warn'} />
+    <KpiTile title="Billing Period Energy Est." value={summary?.billingEnergyEstimate != null ? money(summary.billingEnergyEstimate) : '—'} metaPillText="Billing-to-date" metaText={billingPeriodText} metaTone={summary?.billingPeriodStart ? 'neutral' : 'warn'} />
+    <KpiTile
+      title="Top-3 Avg kW"
+      value={summary?.currentMonthTop3AvgKW.toFixed(2) ?? '—'}
+      metaPillText={summary?.top3AvgPctVsLastMonth != null ? formatPct(summary.top3AvgPctVsLastMonth) : undefined}
+      metaText="vs last month"
+      metaTone={toneFromDelta(summary?.top3AvgPctVsLastMonth, true)}
+    />
+    <KpiTile
+      title="Ratchet Floor kW"
+      value={summary?.ratchetFloorKW.toFixed(2) ?? '—'}
+      metaPillText="60% rule"
+      metaText={peakPct != null ? `${peakPct.toFixed(1)}% of 11-month max` : 'ratchet baseline'}
+      metaTone="neutral"
+    />
+    <KpiTile
+      title="Billed Demand kW"
+      value={summary?.billedDemandEstimateKW.toFixed(2) ?? '—'}
+      metaPillText={billedDemandVsRatchet ? 'Ratchet binding' : 'Top-3 basis'}
+      metaText="billed = max(top-3 avg, ratchet floor)"
+      metaTone={billedDemandVsRatchet ? 'warn' : 'neutral'}
+    />
+    <KpiTile
+      title="Demand Est. $/month"
+      value={summary ? money(summary.demandEstimateMonth) : '—'}
+      metaPillText={summary?.demandCostPctVsLastMonth != null ? formatPct(summary.demandCostPctVsLastMonth) : undefined}
+      metaText="vs last month (ratchet-aware)"
+      metaTone={toneFromDelta(summary?.demandCostPctVsLastMonth, true)}
+    />
     <div className="card chart-card full">
       <h3>Live kW - Last 30 Minutes</h3>
       <ReactECharts style={{ height: 260 }} option={buildChartOption({ xData: liveSeries30m.map((p) => new Date(p.t).toLocaleTimeString()), yName: 'kW', series: [{ type: 'line', data: liveSeries30m.map((p) => p.kW), smooth: true, showSymbol: false }] })} />

@@ -62,6 +62,22 @@ export type Summary = {
   currentBillingPeriodTop3AvgKW: number | null
   currentBillingPeriodBilledDemandKW: number | null
   billingRatchetFloorKW: number | null
+  currentKWPrev15m: number | null
+  currentKWPctVsPrev15m: number | null
+  liveKWAvg5m: number | null
+  liveKWPctVs5mAvg: number | null
+  yesterdayKWhToTime: number | null
+  todayKWhPctVsYesterdayToTime: number | null
+  avgDailyKWh30d: number | null
+  mtdKWhPacePctVs30dAvg: number | null
+  maxIntervalKW11mo: number | null
+  todayPeakPctOf11moMax: number | null
+  lastMonthTop3AvgKW: number | null
+  top3AvgPctVsLastMonth: number | null
+  lastMonthBilledDemandKW: number | null
+  billedDemandPctVsLastMonth: number | null
+  lastMonthDemandCost: number | null
+  demandCostPctVsLastMonth: number | null
 }
 
 export type BillingMonth = {
