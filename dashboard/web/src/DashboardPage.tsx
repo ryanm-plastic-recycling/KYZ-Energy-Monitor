@@ -1,16 +1,17 @@
 import ReactECharts from 'echarts-for-react'
-import { useEffect, useRef, useState } from 'react'
-import { NavLink, Route, Routes } from 'react-router-dom'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { NavLink, Route, Routes, useLocation } from 'react-router-dom'
 import { client } from './api'
+import { buildChartOption } from './chartTheme'
+import { DataExplorerPage } from './DataExplorerPage'
+import { applyTheme, getInitialTheme, setStoredTheme, type ThemeMode } from './theme'
 import type { BillingMonth, Health, IntervalSeriesPoint, LiveSeriesPoint, Metrics, Quality, Summary } from './types'
 
 const money = (n: number) => `$${n.toLocaleString(undefined, { maximumFractionDigits: 0 })}`
 
 function getMonthRange(base: Date, offsetMonths = 0): { start: Date; end: Date } {
-  const year = base.getFullYear()
-  const month = base.getMonth() + offsetMonths
-  const start = new Date(year, month, 1)
-  const end = new Date(year, month + 1, 1)
+  const start = new Date(base.getFullYear(), base.getMonth() + offsetMonths, 1)
+  const end = new Date(base.getFullYear(), base.getMonth() + offsetMonths + 1, 1)
   return { start, end }
 }
 
@@ -31,7 +32,38 @@ function getMonitorStatus(health: Health | null): { label: string; cls: 'good' |
   return { label: 'KYZ Monitor Connected', cls: 'good' }
 }
 
+function ChartOrPlaceholder({ title, data, height, xLabel, seriesType = 'line' }: { title: string; data: IntervalSeriesPoint[] | null; height: number; xLabel: Intl.DateTimeFormatOptions; seriesType?: 'line' | 'bar' }) {
+  const option = useMemo(() => {
+    if (!data || !data.length) return null
+    return buildChartOption({
+      xData: data.map((p) => new Date(p.t).toLocaleString(undefined, xLabel)),
+      yName: 'kW',
+      series: [{ type: seriesType, data: data.map((p) => p.kW), smooth: true, showSymbol: false }],
+    })
+  }, [data, xLabel, seriesType])
+
+  return (
+    <div className="card chart-card">
+      <h3>{title}</h3>
+      {option ? <ReactECharts style={{ height }} option={option} /> : <p className="muted">No data available.</p>}
+    </div>
+  )
+}
+
+function HeaderLogos() {
+  const priLogo = import.meta.env.VITE_PRI_LOGO_URL
+  const innovationLogo = import.meta.env.VITE_INNOVATION_LOGO_URL
+  return (
+    <div className="logo-row" aria-label="Brand logos">
+      {priLogo ? <img src={priLogo} alt="PRI logo" className="brand-logo" /> : null}
+      {innovationLogo ? <img src={innovationLogo} alt="Innovation Team logo" className="brand-logo" /> : null}
+    </div>
+  )
+}
+
 export function DashboardPage() {
+  const location = useLocation()
+  const [theme, setTheme] = useState<ThemeMode>(() => getInitialTheme())
   const [summary, setSummary] = useState<Summary | null>(null)
   const [billing, setBilling] = useState<BillingMonth[]>([])
   const [billingBasis, setBillingBasis] = useState<'calendar' | 'billing'>('calendar')
@@ -49,16 +81,7 @@ export function DashboardPage() {
 
   useEffect(() => {
     const loadFast = async () => {
-      const settled = await Promise.allSettled([
-        client.summary(),
-        client.billing(24, billingBasis),
-        client.quality(),
-        client.metrics(),
-        client.health(),
-        client.series(24 * 60),
-        client.liveSeries(30),
-      ])
-
+      const settled = await Promise.allSettled([client.summary(), client.billing(24, billingBasis), client.quality(), client.metrics(), client.health(), client.series(24 * 60), client.liveSeries(30)])
       if (settled[0].status === 'fulfilled') setSummary(settled[0].value)
       if (settled[1].status === 'fulfilled') {
         setBilling(settled[1].value.months)
@@ -77,13 +100,11 @@ export function DashboardPage() {
       const { start: currentMonthStart } = getMonthRange(now)
       const { start: lastMonthStart } = getMonthRange(now, -1)
       const { start: weekStart, end: weekEnd } = getCurrentWeekRange(now)
-
       const settled = await Promise.allSettled([
         client.series(24 * 60, lastMonthStart.toISOString(), currentMonthStart.toISOString()),
         client.series(24 * 60, currentMonthStart.toISOString(), now.toISOString()),
         client.series(7 * 24 * 60, weekStart.toISOString(), weekEnd.toISOString()),
       ])
-
       setLastMonthProfile(settled[0].status === 'fulfilled' ? settled[0].value.points : null)
       setCurrentMonthProfile(settled[1].status === 'fulfilled' ? settled[1].value.points : null)
       setCurrentWeekProfile(settled[2].status === 'fulfilled' ? settled[2].value.points : null)
@@ -104,26 +125,38 @@ export function DashboardPage() {
   }, [billingBasis])
 
   const monitorStatus = getMonitorStatus(health)
+  const withSearch = (path: string) => `${path}${location.search}`
+  const toggleTheme = () => {
+    const next: ThemeMode = theme === 'dark' ? 'light' : 'dark'
+    setTheme(next)
+    setStoredTheme(next)
+    applyTheme(next)
+  }
 
   return (
     <div className="page">
       <header className="header">
-        <div>
-          <h1>Plant Energy Dashboard</h1>
-          <small>{summary?.plantName ?? 'Plant'} • Last updated: {summary?.lastUpdated ? new Date(summary.lastUpdated).toLocaleString() : '—'}</small>
+        <div className="brand-cluster">
+          <div>
+            <h1>Plant Energy Dashboard</h1>
+            <small>{summary?.plantName ?? 'Plant'} • Last updated: {summary?.lastUpdated ? new Date(summary.lastUpdated).toLocaleString() : '—'}</small>
+          </div>
+          <HeaderLogos />
         </div>
         <div className="pills">
-          <span className={`pill ${metrics?.dbConnected ? 'good' : 'bad'}`}>DB {metrics?.dbConnected ? 'Connected' : 'Offline'}</span>
-          <span className={`pill ${monitorStatus.cls}`}>{monitorStatus.label}</span>
+          <span className={`pill ${metrics?.dbConnected ? 'good' : 'bad'}`}><span className={`dot ${metrics?.dbConnected ? 'good' : 'bad'}`} />DB {metrics?.dbConnected ? 'Connected' : 'Offline'}</span>
+          <span className={`pill ${monitorStatus.cls}`}><span className={`dot ${monitorStatus.cls}`} />{monitorStatus.label}</span>
+          <button className="theme-toggle" onClick={toggleTheme}>{theme === 'dark' ? 'Dark' : 'Light'}</button>
         </div>
       </header>
 
       <nav className="topnav">
-        <NavLink to="/">Executive</NavLink>
-        <NavLink to="/operations">Operations</NavLink>
-        <NavLink to="/billing-risk">Billing & Risk</NavLink>
-        <NavLink to="/data-quality">Data Quality</NavLink>
-        <NavLink to="/kiosk">Kiosk</NavLink>
+        <NavLink to={withSearch('/')}>Executive</NavLink>
+        <NavLink to={withSearch('/operations')}>Operations</NavLink>
+        <NavLink to={withSearch('/billing-risk')}>Billing & Risk</NavLink>
+        <NavLink to={withSearch('/data-quality')}>Data Quality</NavLink>
+        <NavLink to={withSearch('/data-explorer')}>Data Explorer</NavLink>
+        <NavLink to={withSearch('/kiosk')}>Kiosk</NavLink>
       </nav>
 
       <Routes>
@@ -131,25 +164,10 @@ export function DashboardPage() {
         <Route path="/operations" element={<Operations series24h={series24h} metrics={metrics} lastMonthProfile={lastMonthProfile} currentMonthProfile={currentMonthProfile} currentWeekProfile={currentWeekProfile} />} />
         <Route path="/billing-risk" element={<BillingRisk summary={summary} billing={billing} billingBasis={billingBasis} setBillingBasis={setBillingBasis} billingMode={billingMode} billingAnchorDate={billingAnchorDate} />} />
         <Route path="/data-quality" element={<DataQuality quality={quality} />} />
+        <Route path="/data-explorer" element={<DataExplorerPage />} />
       </Routes>
     </div>
   )
-}
-
-function ChartOrPlaceholder({
-  title,
-  data,
-  height,
-  xLabel,
-  color,
-}: {
-  title: string
-  data: IntervalSeriesPoint[] | null
-  height: number
-  xLabel: Intl.DateTimeFormatOptions
-  color: string
-}) {
-  return <div className="card chart-card full"><h3>{title}</h3>{data ? <ReactECharts style={{ height }} option={{ tooltip: { trigger: 'axis' }, xAxis: { type: 'category', data: data.map((p) => new Date(p.t).toLocaleString(undefined, xLabel)) }, yAxis: { type: 'value', name: 'kW' }, series: [{ type: 'line', data: data.map((p) => p.kW), showSymbol: false, lineStyle: { color } }] }} /> : <p>Data unavailable</p>}</div>
 }
 
 function Executive({ summary, liveSeries30m, currentMonthProfile }: { summary: Summary | null; liveSeries30m: LiveSeriesPoint[]; currentMonthProfile: IntervalSeriesPoint[] | null }) {
@@ -166,19 +184,23 @@ function Executive({ summary, liveSeries30m, currentMonthProfile }: { summary: S
     <Card t="Ratchet Floor kW" v={summary?.ratchetFloorKW.toFixed(2) ?? '—'} />
     <Card t="Billed Demand kW" v={summary?.billedDemandEstimateKW.toFixed(2) ?? '—'} />
     <Card t="Demand Est. $/month" v={summary ? money(summary.demandEstimateMonth) : '—'} />
-    <Card t="Cost of 100 kW Peak" v={summary ? money(summary.costOf100kwPeakAnnual) + '/yr' : '—'} />
-    <Card t="Billing Period" v={summary?.billingPeriodStart && summary?.billingPeriodEnd ? `${summary.billingPeriodStart} → ${summary.billingPeriodEnd}` : '—'} />
-    <div className="card chart-card full"><h3>Live kW - Last 30 Minutes</h3><ReactECharts style={{ height: 260 }} option={{ xAxis: { type: 'category', data: liveSeries30m.map((p) => new Date(p.t).toLocaleTimeString()) }, yAxis: { type: 'value', name: 'kW' }, series: [{ type: 'line', data: liveSeries30m.map((p) => p.kW), smooth: true, lineStyle: { color: '#00a3ff' } }] }} /></div>
-    <ChartOrPlaceholder title="Current Month kW Profile (15-minute intervals)" data={currentMonthProfile} height={280} xLabel={{ month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }} color="#4c6ef5" />
+    <div className="card chart-card full">
+      <h3>Live kW - Last 30 Minutes</h3>
+      <ReactECharts style={{ height: 260 }} option={buildChartOption({ xData: liveSeries30m.map((p) => new Date(p.t).toLocaleTimeString()), yName: 'kW', series: [{ type: 'line', data: liveSeries30m.map((p) => p.kW), smooth: true, showSymbol: false }] })} />
+    </div>
+    <ChartOrPlaceholder title="Current Month kW Profile (15-minute intervals)" data={currentMonthProfile} height={280} xLabel={{ month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }} />
   </section>
 }
 
 function Operations({ series24h, metrics, lastMonthProfile, currentMonthProfile, currentWeekProfile }: { series24h: IntervalSeriesPoint[]; metrics: Metrics | null; lastMonthProfile: IntervalSeriesPoint[] | null; currentMonthProfile: IntervalSeriesPoint[] | null; currentWeekProfile: IntervalSeriesPoint[] | null }) {
   return <section className="grid charts">
-    <div className="card chart-card full"><h3>kW Profile - Last 24 Hours</h3><ReactECharts style={{ height: 320 }} option={{ xAxis: { type: 'category', data: series24h.map((p) => new Date(p.t).toLocaleTimeString()) }, yAxis: { type: 'value', name: 'kW' }, series: [{ type: 'line', data: series24h.map((p) => p.kW), smooth: true, lineStyle: { color: '#0a3a66' } }] }} /></div>
-    <ChartOrPlaceholder title="Last Month kW Profile (15-minute intervals)" data={lastMonthProfile} height={300} xLabel={{ month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }} color="#228be6" />
-    <ChartOrPlaceholder title="Current Month kW Profile to Date (15-minute intervals)" data={currentMonthProfile} height={300} xLabel={{ month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }} color="#5f3dc4" />
-    <ChartOrPlaceholder title="Current Week kW (Monday to Sunday, 15-minute intervals)" data={currentWeekProfile} height={300} xLabel={{ weekday: 'short', hour: '2-digit', minute: '2-digit' }} color="#0ca678" />
+    <div className="card chart-card full">
+      <h3>kW Profile - Last 24 Hours</h3>
+      <ReactECharts style={{ height: 320 }} option={buildChartOption({ xData: series24h.map((p) => new Date(p.t).toLocaleTimeString()), yName: 'kW', series: [{ type: 'line', data: series24h.map((p) => p.kW), smooth: true, showSymbol: false }] })} />
+    </div>
+    <ChartOrPlaceholder title="Last Month kW Profile (15-minute intervals)" data={lastMonthProfile} height={300} xLabel={{ month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }} />
+    <ChartOrPlaceholder title="Current Month kW Profile to Date (15-minute intervals)" data={currentMonthProfile} height={300} xLabel={{ month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }} />
+    <ChartOrPlaceholder title="Current Week kW (Monday to Sunday, 15-minute intervals)" data={currentWeekProfile} height={300} xLabel={{ weekday: 'short', hour: '2-digit', minute: '2-digit' }} />
     <Card t="Rows (24h)" v={String(metrics?.rowCount24h ?? '—')} />
     <Card t="Seconds Since Last Interval" v={String(metrics?.secondsSinceLastInterval ?? '—')} />
   </section>
@@ -188,15 +210,27 @@ function BillingRisk({ summary, billing, billingBasis, setBillingBasis, billingM
   return <section className="grid charts">
     <div className="card full">
       <h3>Billing Basis</h3>
-      <div style={{ display: 'flex', gap: 8 }}>
+      <div className="btn-group">
         <button onClick={() => setBillingBasis('calendar')} disabled={billingBasis === 'calendar'}>Calendar Months</button>
         <button onClick={() => setBillingBasis('billing')} disabled={billingBasis === 'billing'}>Billing Periods</button>
       </div>
-      <p>{billingMode === 'billing' ? `Using anchored billing periods (anchor: ${billingAnchorDate ?? 'n/a'})` : 'Using calendar month aggregation.'}</p>
+      <p className="muted">{billingMode === 'billing' ? `Using anchored billing periods (anchor: ${billingAnchorDate ?? 'n/a'})` : 'Using calendar month aggregation.'}</p>
     </div>
     <Card t="Demand Estimate" v={summary ? money(summary.demandEstimateMonth) : '—'} />
     <Card t="Energy Estimate" v={summary ? money(summary.energyEstimateMonth) : '—'} />
-    <div className="card chart-card full"><h3>Ratchet-aware Billing Demand (24 periods)</h3><ReactECharts style={{ height: 330 }} option={{ tooltip: { trigger: 'axis' }, legend: { data: ['Top3', 'Ratchet Floor', 'Billed Demand'] }, xAxis: { type: 'category', data: billing.map((m) => billingMode === 'billing' ? m.periodStart : m.monthStart.slice(0, 7)) }, yAxis: { type: 'value', name: 'kW' }, series: [{ name: 'Top3', type: 'line', data: billing.map((m) => m.top3AvgKW) }, { name: 'Ratchet Floor', type: 'line', data: billing.map((m) => m.ratchetFloorKW) }, { name: 'Billed Demand', type: 'bar', data: billing.map((m) => m.billedDemandKW) }] }} /></div>
+    <div className="card chart-card full">
+      <h3>Ratchet-aware Billing Demand (24 periods)</h3>
+      <ReactECharts style={{ height: 330 }} option={buildChartOption({
+        xData: billing.map((m) => billingMode === 'billing' ? m.periodStart : m.monthStart.slice(0, 7)),
+        yName: 'kW',
+        legend: ['Top3', 'Ratchet Floor', 'Billed Demand'],
+        series: [
+          { name: 'Top3', type: 'line', data: billing.map((m) => m.top3AvgKW), smooth: true, showSymbol: false },
+          { name: 'Ratchet Floor', type: 'line', data: billing.map((m) => m.ratchetFloorKW), smooth: true, showSymbol: false },
+          { name: 'Billed Demand', type: 'bar', data: billing.map((m) => m.billedDemandKW) },
+        ],
+      })} />
+    </div>
   </section>
 }
 
@@ -211,5 +245,5 @@ function DataQuality({ quality }: { quality: Quality | null }) {
 }
 
 function Card({ t, v }: { t: string; v: string }) {
-  return <div className="card"><h3>{t}</h3><p>{v}</p></div>
+  return <div className="card kpi-card"><h3>{t}</h3><p>{v}</p></div>
 }

@@ -26,6 +26,10 @@ export type IntervalSeriesPoint = {
   t: string
   kW: number
   kWh: number
+  flags?: {
+    r17Exclude: boolean
+    kyzInvalidAlarm: boolean
+  }
 }
 
 export type Health = {
