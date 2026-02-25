@@ -233,3 +233,46 @@ tbody tr.selected { background: color-mix(in srgb, var(--surface2) 55%, var(--br
   .page, .kiosk { padding: 0 12px 14px; }
   .kpi-card, .kiosk-kpis .kpi-card { grid-column: span 12; }
 }
+
+.kpi-meta {
+  margin-top: 10px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 650;
+}
+
+.kpi-pill {
+  font-size: 0.76rem;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface2) 85%, transparent);
+  font-weight: 800;
+  letter-spacing: 0.01em;
+}
+
+.kpi-pill.neutral {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--border) 85%, var(--text) 15%);
+}
+
+.kpi-pill.good {
+  color: var(--good);
+  border-color: color-mix(in srgb, var(--good) 45%, var(--border));
+  background: color-mix(in srgb, var(--good) 14%, var(--surface2));
+}
+
+.kpi-pill.warn {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 45%, var(--border));
+  background: color-mix(in srgb, var(--warn) 14%, var(--surface2));
+}
+
+.kpi-pill.bad {
+  color: var(--bad);
+  border-color: color-mix(in srgb, var(--bad) 45%, var(--border));
+  background: color-mix(in srgb, var(--bad) 14%, var(--surface2));
+}

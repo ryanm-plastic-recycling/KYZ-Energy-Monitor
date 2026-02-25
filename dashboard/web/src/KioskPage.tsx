@@ -3,8 +3,10 @@ import { useEffect, useMemo, useState } from 'react'
 import { client } from './api'
 import { INNOV_LOGO_SRC, PRI_LOGO_SRC } from './brand'
 import { buildChartOption } from './chartTheme'
+import { KpiTile } from './KpiTile'
+import { formatPct } from './kpiMeta'
 import { applyTheme, getInitialTheme, type ThemeMode } from './theme'
-import type { Health, IntervalSeriesPoint, LatestRow, LiveLatestRow, LiveSeriesPoint } from './types'
+import type { Health, IntervalSeriesPoint, LatestRow, LiveLatestRow, LiveSeriesPoint, Summary } from './types'
 
 function getCurrentWeekRange(base: Date): { start: Date; end: Date } {
   const day = base.getDay()
@@ -34,6 +36,7 @@ export function KioskPage() {
   const [liveLatest, setLiveLatest] = useState<LiveLatestRow | null>(null)
   const [liveSeries30m, setLiveSeries30m] = useState<LiveSeriesPoint[]>([])
   const [weekSeries, setWeekSeries] = useState<IntervalSeriesPoint[]>([])
+  const [summary, setSummary] = useState<Summary | null>(null)
 
   useEffect(() => {
     if (kioskThemeParam === 'light' || kioskThemeParam === 'dark') {
@@ -47,18 +50,20 @@ export function KioskPage() {
     try {
       const now = new Date()
       const week = getCurrentWeekRange(now)
-      const [h, l, ll, live, weekData] = await Promise.all([
+      const [h, l, ll, live, weekData, s] = await Promise.all([
         client.health(),
         client.latest(),
         client.liveLatest(),
         client.liveSeries(30),
         client.series(7 * 24 * 60, week.start.toISOString(), week.end.toISOString()),
+        client.summary(),
       ])
       setHealth(h)
       setLatest(l)
       setLiveLatest(ll)
       setLiveSeries30m(live.points)
       setWeekSeries(weekData.points)
+      setSummary(s)
     } catch {
       // no-op for kiosk retry behavior
     }
@@ -101,10 +106,22 @@ export function KioskPage() {
         <span className="pill">{health?.latestIntervalEnd ? new Date(health.latestIntervalEnd).toLocaleString() : 'No data'}</span>
       </div>
       <section className="grid kpis kiosk-kpis">
-        <div className="card kpi-card"><h3>Live kW (15s)</h3><p>{liveLatest?.kW?.toFixed(2) ?? '—'}</p></div>
-        <div className="card kpi-card"><h3>Current kW (15m demand)</h3><p>{latest?.kW?.toFixed(2) ?? '—'}</p></div>
-        <div className="card kpi-card"><h3>Current kWh</h3><p>{latest?.kWh?.toFixed(3) ?? '—'}</p></div>
-        <div className="card kpi-card"><h3>Pulse Count</h3><p>{latest?.PulseCount ?? '—'}</p></div>
+        <KpiTile
+          title="Live kW (15s)"
+          value={liveLatest?.kW?.toFixed(2) ?? '—'}
+          metaPillText={summary?.liveKWPctVs5mAvg != null ? (Math.abs(summary.liveKWPctVs5mAvg) <= 1 ? 'Stable' : formatPct(summary.liveKWPctVs5mAvg)) : undefined}
+          metaText="vs 5m avg • 15s cadence"
+          metaTone={summary?.liveKWPctVs5mAvg != null ? (Math.abs(summary.liveKWPctVs5mAvg) <= 1 ? 'neutral' : 'warn') : 'neutral'}
+        />
+        <KpiTile
+          title="Current kW (15m demand)"
+          value={latest?.kW?.toFixed(2) ?? '—'}
+          metaPillText={summary?.currentKWPctVsPrev15m != null ? formatPct(summary.currentKWPctVsPrev15m) : undefined}
+          metaText="vs prior 15m"
+          metaTone={summary?.currentKWPctVsPrev15m != null ? (summary.currentKWPctVsPrev15m <= 0 ? 'good' : 'warn') : 'neutral'}
+        />
+        <KpiTile title="Current kWh" value={latest?.kWh?.toFixed(3) ?? '—'} metaPillText="15m interval" metaText="interval energy" metaTone="neutral" />
+        <KpiTile title="Pulse Count" value={String(latest?.PulseCount ?? '—')} metaPillText="meter pulses" metaText="raw counter" metaTone="neutral" />
       </section>
       <section className="grid charts">
         <div className="card chart-card full">
