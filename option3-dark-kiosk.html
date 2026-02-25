@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>KYZ Energy Monitor — Option 3 (Modern Dark Kiosk/NOC)</title>
+  <style>
+    :root{
+      /* Brand anchors (still the same company feel) */
+      --brand-900:#12263a;
+      --brand-700:#234768;
+      --brand-500:#3a5f87;
+
+      /* Dark theme */
+      --bg:#070c14;
+      --surface:#0c1526;
+      --surface-2:#0f1c33;
+      --border:rgba(200,215,235,.12);
+      --text:#eaf2ff;
+      --muted:rgba(234,242,255,.70);
+
+      /* Accents */
+      --blue:#00a3ff;
+      --green:#3ecf8e;
+      --amber:#f6b01e;
+      --red:#ff5a5f;
+
+      --shadow: 0 18px 40px rgba(0,0,0,.55);
+      --r16:16px;
+      --r22:22px;
+      --gap:14px;
+
+      --font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%}
+    body{
+      margin:0;
+      font-family:var(--font);
+      color:var(--text);
+      background:
+        radial-gradient(900px 500px at 10% 0%, rgba(0,163,255,.18), transparent 55%),
+        radial-gradient(900px 500px at 90% 0%, rgba(62,207,142,.12), transparent 50%),
+        linear-gradient(180deg, var(--bg), #04070d 60%, #03060c);
+      overflow:hidden;
+    }
+
+    .wrap{
+      height:100vh;
+      display:grid;
+      grid-template-rows: auto auto 1fr;
+      gap:var(--gap);
+      padding:14px;
+    }
+
+    .header{
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      gap:12px;
+      padding:14px 16px;
+      border-radius: var(--r22);
+      border:1px solid var(--border);
+      background: linear-gradient(135deg, rgba(18,38,58,.55), rgba(15,28,51,.72));
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(10px);
+    }
+
+    .brand{
+      display:flex;
+      gap:12px;
+      align-items:center;
+    }
+
+    .logo{
+      width:44px;
+      height:44px;
+      border-radius: 14px;
+      background: linear-gradient(135deg, var(--blue), var(--green));
+      box-shadow: 0 18px 36px rgba(0,163,255,.22);
+      position:relative;
+      overflow:hidden;
+    }
+    .logo:after{
+      content:"";
+      position:absolute;
+      inset:-30% -50% auto auto;
+      width:150%;
+      height:150%;
+      background: radial-gradient(circle at 30% 30%, rgba(255,255,255,.24), transparent 58%);
+      transform: rotate(14deg);
+    }
+
+    .header h1{margin:0;font-size:18px;letter-spacing:.2px}
+    .header small{color:var(--muted)}
+
+    .pills{display:flex; gap:10px; flex-wrap:wrap; justify-content:flex-end}
+    .pill{
+      display:inline-flex;
+      align-items:center;
+      gap:8px;
+      padding:8px 12px;
+      border-radius:999px;
+      border:1px solid var(--border);
+      background: rgba(255,255,255,.04);
+      color: rgba(234,242,255,.90);
+      font-weight:900;
+      font-size:12px;
+      letter-spacing:.2px;
+    }
+    .dot{width:9px;height:9px;border-radius:999px}
+    .dot.good{background:var(--green)}
+    .dot.warn{background:var(--amber)}
+    .dot.bad{background:var(--red)}
+
+    .kpis{
+      display:grid;
+      grid-template-columns: repeat(12, 1fr);
+      gap:var(--gap);
+    }
+    .card{
+      border:1px solid var(--border);
+      border-radius: var(--r22);
+      background: linear-gradient(180deg, rgba(12,21,38,.82), rgba(12,21,38,.62));
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(10px);
+      overflow:hidden;
+      position:relative;
+    }
+    .kpi{
+      grid-column: span 3;
+      padding:14px 16px;
+      min-height: 132px;
+    }
+    .kpi:before{
+      content:"";
+      position:absolute;
+      inset:-30% -20% auto auto;
+      width:240px;
+      height:240px;
+      background: radial-gradient(circle at 30% 30%, rgba(0,163,255,.18), transparent 60%);
+      transform: rotate(14deg);
+    }
+
+    .kpi .label{color:var(--muted);font-size:12px;font-weight:900;letter-spacing:.2px}
+    .kpi .value{margin-top:10px;font-size:40px;font-weight:950;letter-spacing:.2px}
+    .kpi .sub{margin-top:10px;color:rgba(234,242,255,.78);font-size:12px;display:flex;gap:10px;align-items:center}
+    .mono{font-family:var(--mono)}
+    .badge{
+      display:inline-flex;
+      align-items:center;
+      gap:8px;
+      padding:5px 10px;
+      border-radius:999px;
+      border:1px solid rgba(234,242,255,.14);
+      background: rgba(255,255,255,.04);
+      font-weight:900;
+      font-size:12px;
+    }
+
+    .charts{
+      display:grid;
+      grid-template-columns: 1fr 1fr;
+      gap:var(--gap);
+      height:100%;
+      min-height:0;
+    }
+    .panel{padding:14px 16px; display:flex; flex-direction:column; min-height:0}
+    .panel h2{margin:0;font-size:14px;letter-spacing:.2px}
+    .panel p{margin:6px 0 0;color:var(--muted);font-size:12px;line-height:1.5}
+    .chart{
+      margin-top:12px;
+      border:1px solid rgba(234,242,255,.12);
+      border-radius: 18px;
+      background: rgba(255,255,255,.03);
+      padding:10px;
+      flex:1;
+      min-height:0;
+    }
+
+    .chart svg{width:100%;height:100%;display:block}
+    .axis{stroke: rgba(234,242,255,.22); stroke-width:1}
+    .gridline{stroke: rgba(234,242,255,.10); stroke-width:1}
+    .line{fill:none; stroke: var(--blue); stroke-width:3}
+    .line2{fill:none; stroke: var(--green); stroke-width:2.5; opacity:.95}
+    .area{fill: rgba(0,163,255,.10)}
+    .label{fill: rgba(234,242,255,.72); font-size:11px}
+
+    @media (max-width: 1100px){
+      body{overflow:auto}
+      .wrap{height:auto}
+      .kpi{grid-column: span 6}
+      .charts{grid-template-columns:1fr}
+    }
+    @media (max-width: 560px){
+      .kpi{grid-column: span 12}
+      .pills{justify-content:flex-start}
+      .kpi .value{font-size:34px}
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header class="header">
+      <div class="brand">
+        <div class="logo" aria-hidden="true"></div>
+        <div>
+          <h1>Plant Energy Dashboard — Kiosk</h1>
+          <small>High-contrast, big numbers, built for TVs + control rooms.</small>
+        </div>
+      </div>
+      <div class="pills" aria-label="Status">
+        <span class="pill"><span class="dot good"></span>LIVE</span>
+        <span class="pill"><span class="dot warn"></span>MONITOR DELAYED</span>
+        <span class="pill"><span class="dot good"></span>DB CONNECTED</span>
+        <span class="pill"><span class="dot good"></span>2026-02-24 15:15</span>
+      </div>
+    </header>
+
+    <section class="kpis" aria-label="KPI tiles">
+      <div class="card kpi">
+        <div class="label">Live kW (15s)</div>
+        <div class="value">798.1</div>
+        <div class="sub"><span class="badge"><span class="dot good"></span>Stable</span><span class="mono">EventStream</span></div>
+      </div>
+      <div class="card kpi">
+        <div class="label">Current kW (15m demand)</div>
+        <div class="value">812.4</div>
+        <div class="sub"><span class="badge"><span class="dot warn"></span>Near Peak</span><span class="mono">15m interval</span></div>
+      </div>
+      <div class="card kpi">
+        <div class="label">Current kWh (interval)</div>
+        <div class="value">260.4</div>
+        <div class="sub"><span class="badge"><span class="dot good"></span>OK</span><span class="mono">kWh=Δ pulses</span></div>
+      </div>
+      <div class="card kpi">
+        <div class="label">Pulse Count</div>
+        <div class="value">1,234,567</div>
+        <div class="sub"><span class="badge"><span class="dot good"></span>Running</span><span class="mono">total</span></div>
+      </div>
+    </section>
+
+    <section class="charts" aria-label="Charts">
+      <div class="card panel">
+        <h2>Live kW — last 30 minutes</h2>
+        <p>Modern dark theme: less “gray on gray”, more signal-to-noise.</p>
+        <div class="chart">
+          <svg viewBox="0 0 900 340" role="img" aria-label="Live kW chart">
+            <line class="axis" x1="55" y1="18" x2="55" y2="310" />
+            <line class="axis" x1="55" y1="310" x2="880" y2="310" />
+            <line class="gridline" x1="55" y1="88" x2="880" y2="88" />
+            <line class="gridline" x1="55" y1="158" x2="880" y2="158" />
+            <line class="gridline" x1="55" y1="228" x2="880" y2="228" />
+
+            <text class="label" x="14" y="92">1000</text>
+            <text class="label" x="22" y="162">800</text>
+            <text class="label" x="22" y="232">600</text>
+            <text class="label" x="22" y="314">400</text>
+
+            <path class="area" d="M55 250 L130 238 L205 242 L280 220 L355 212 L430 226 L505 198 L580 186 L655 202 L730 168 L805 178 L880 150 L880 310 L55 310 Z"/>
+            <path class="line" d="M55 250 L130 238 L205 242 L280 220 L355 212 L430 226 L505 198 L580 186 L655 202 L730 168 L805 178 L880 150"/>
+
+            <text class="label" x="55" y="332">-30m</text>
+            <text class="label" x="850" y="332">now</text>
+          </svg>
+        </div>
+      </div>
+
+      <div class="card panel">
+        <h2>Current week — 15m intervals</h2>
+        <p>Green line uses the same “good” language as your status chips.</p>
+        <div class="chart">
+          <svg viewBox="0 0 900 340" role="img" aria-label="Week chart">
+            <line class="axis" x1="55" y1="18" x2="55" y2="310" />
+            <line class="axis" x1="55" y1="310" x2="880" y2="310" />
+            <line class="gridline" x1="55" y1="88" x2="880" y2="88" />
+            <line class="gridline" x1="55" y1="158" x2="880" y2="158" />
+            <line class="gridline" x1="55" y1="228" x2="880" y2="228" />
+
+            <text class="label" x="14" y="92">1100</text>
+            <text class="label" x="22" y="162">900</text>
+            <text class="label" x="22" y="232">700</text>
+            <text class="label" x="22" y="314">500</text>
+
+            <path class="line2" d="M55 260 L120 248 L185 252 L250 232 L315 220 L380 210 L445 230 L510 205 L575 200 L640 180 L705 195 L770 170 L835 178 L880 160"/>
+
+            <text class="label" x="55" y="332">Mon</text>
+            <text class="label" x="220" y="332">Tue</text>
+            <text class="label" x="385" y="332">Wed</text>
+            <text class="label" x="550" y="332">Thu</text>
+            <text class="label" x="715" y="332">Fri</text>
+            <text class="label" x="850" y="332">Sun</text>
+          </svg>
+        </div>
+      </div>
+    </section>
+  </div>
+</body>
+</html>
