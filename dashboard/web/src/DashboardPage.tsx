@@ -2,6 +2,7 @@ import ReactECharts from 'echarts-for-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { NavLink, Route, Routes, useLocation } from 'react-router-dom'
 import { client } from './api'
+import { INNOV_LOGO_SRC, PRI_LOGO_SRC } from './brand'
 import { buildChartOption } from './chartTheme'
 import { DataExplorerPage } from './DataExplorerPage'
 import { applyTheme, getInitialTheme, setStoredTheme, type ThemeMode } from './theme'
@@ -32,7 +33,7 @@ function getMonitorStatus(health: Health | null): { label: string; cls: 'good' |
   return { label: 'KYZ Monitor Connected', cls: 'good' }
 }
 
-function ChartOrPlaceholder({ title, data, height, xLabel, seriesType = 'line' }: { title: string; data: IntervalSeriesPoint[] | null; height: number; xLabel: Intl.DateTimeFormatOptions; seriesType?: 'line' | 'bar' }) {
+function ChartOrPlaceholder({ title, data, height, xLabel, seriesType = 'line', className = '' }: { title: string; data: IntervalSeriesPoint[] | null; height: number; xLabel: Intl.DateTimeFormatOptions; seriesType?: 'line' | 'bar'; className?: string }) {
   const option = useMemo(() => {
     if (!data || !data.length) return null
     return buildChartOption({
@@ -43,20 +44,9 @@ function ChartOrPlaceholder({ title, data, height, xLabel, seriesType = 'line' }
   }, [data, xLabel, seriesType])
 
   return (
-    <div className="card chart-card">
+    <div className={`card chart-card ${className}`.trim()}>
       <h3>{title}</h3>
       {option ? <ReactECharts style={{ height }} option={option} /> : <p className="muted">No data available.</p>}
-    </div>
-  )
-}
-
-function HeaderLogos() {
-  const priLogo = import.meta.env.VITE_PRI_LOGO_URL
-  const innovationLogo = import.meta.env.VITE_INNOVATION_LOGO_URL
-  return (
-    <div className="logo-row" aria-label="Brand logos">
-      {priLogo ? <img src={priLogo} alt="PRI logo" className="brand-logo" /> : null}
-      {innovationLogo ? <img src={innovationLogo} alt="Innovation Team logo" className="brand-logo" /> : null}
     </div>
   )
 }
@@ -136,19 +126,23 @@ export function DashboardPage() {
   return (
     <div className="page">
       <header className="header">
-        <div className="brand-cluster">
-          <div>
+        <div className="headerLeft">
+          <img className="priLogoImg" src={PRI_LOGO_SRC} alt="PRI Logo" />
+          <div className="headerTitleBlock">
             <h1>Plant Energy Dashboard</h1>
-            <small>{summary?.plantName ?? 'Plant'} • Last updated: {summary?.lastUpdated ? new Date(summary.lastUpdated).toLocaleString() : '—'}</small>
+            <div className="muted">{summary?.plantName ?? 'Plant'} • Last updated: {summary?.lastUpdated ? new Date(summary.lastUpdated).toLocaleString() : '—'}</div>
           </div>
-          <HeaderLogos />
         </div>
-        <div className="pills">
-          <span className={`pill ${metrics?.dbConnected ? 'good' : 'bad'}`}><span className={`dot ${metrics?.dbConnected ? 'good' : 'bad'}`} />DB {metrics?.dbConnected ? 'Connected' : 'Offline'}</span>
-          <span className={`pill ${monitorStatus.cls}`}><span className={`dot ${monitorStatus.cls}`} />{monitorStatus.label}</span>
+        <div className="headerRight">
           <button className="theme-toggle" onClick={toggleTheme}>{theme === 'dark' ? 'Dark' : 'Light'}</button>
+          <img className="innovLogoImg" src={INNOV_LOGO_SRC} alt="Innovation Team" />
         </div>
       </header>
+
+      <div className="pills">
+        <span className={`pill ${metrics?.dbConnected ? 'good' : 'bad'}`}><span className={`dot ${metrics?.dbConnected ? 'good' : 'bad'}`} />DB {metrics?.dbConnected ? 'Connected' : 'Offline'}</span>
+        <span className={`pill ${monitorStatus.cls}`}><span className={`dot ${monitorStatus.cls}`} />{monitorStatus.label}</span>
+      </div>
 
       <nav className="topnav">
         <NavLink to={withSearch('/')}>Executive</NavLink>
@@ -188,7 +182,7 @@ function Executive({ summary, liveSeries30m, currentMonthProfile }: { summary: S
       <h3>Live kW - Last 30 Minutes</h3>
       <ReactECharts style={{ height: 260 }} option={buildChartOption({ xData: liveSeries30m.map((p) => new Date(p.t).toLocaleTimeString()), yName: 'kW', series: [{ type: 'line', data: liveSeries30m.map((p) => p.kW), smooth: true, showSymbol: false }] })} />
     </div>
-    <ChartOrPlaceholder title="Current Month kW Profile (15-minute intervals)" data={currentMonthProfile} height={280} xLabel={{ month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }} />
+    <ChartOrPlaceholder title="Current Month kW Profile (15-minute intervals)" data={currentMonthProfile} height={280} xLabel={{ month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }} className="full" />
   </section>
 }
 
