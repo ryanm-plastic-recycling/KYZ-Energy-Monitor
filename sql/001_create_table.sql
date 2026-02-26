@@ -4,7 +4,7 @@ CREATE TABLE dbo.KYZ_Interval (
     kWh              DECIMAL(18,6) NOT NULL,
     kW               DECIMAL(18,6) NOT NULL,
     Total_kWh        DECIMAL(18,6) NULL,
-    R17Exclude       BIT           NULL,
-    KyzInvalidAlarm  BIT           NULL,
+    R17Exclude       BIT           NOT NULL DEFAULT (0),
+    KyzInvalidAlarm  BIT           NOT NULL DEFAULT (0),
     CONSTRAINT PK_KYZ_Interval PRIMARY KEY CLUSTERED (IntervalEnd)
 );
