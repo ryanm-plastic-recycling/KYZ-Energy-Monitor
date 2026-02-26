@@ -389,6 +389,11 @@ class MqttSqlService:
         self.pulses_per_kwh = get_env_float("KYZ_PULSES_PER_KWH")
         if self.pulses_per_kwh <= 0:
             raise ConfigError("KYZ_PULSES_PER_KWH must be greater than zero")
+        if self.pulses_per_kwh >= 100 and float(self.pulses_per_kwh).is_integer():
+            self.logger.info(
+                "KYZ_PULSES_PER_KWH=%s looks unusually high. This value must be pulses per kWh (kWh = pulseCount / KYZ_PULSES_PER_KWH), not kWh per pulse.",
+                int(self.pulses_per_kwh),
+            )
 
         self.live_buckets: dict[datetime, dict[str, Any]] = {}
         self.interval_buckets: dict[datetime, dict[str, Any]] = {}
