@@ -35,4 +35,12 @@ The ingestor receives packed payloads and computes:
 
 using bucketed server receive time and `KYZ_PULSES_PER_KWH`.
 
+## Units
+
+- `KYZ_PULSES_PER_KWH` must be configured as **pulses per kWh** (not kWh per pulse).
+- Conversion used by the ingestor: `kWh = pulseCount / KYZ_PULSES_PER_KWH`.
+- Example: if PLC logic is `1 pulse = 1.7 kWh`, set `KYZ_PULSES_PER_KWH=0.5882352941` (`1 / 1.7`).
+- A pulse represents an energy quantum (kWh).
+- kW is derived over each bucket duration from energy (`kW = kWh * 3600 / bucket_seconds`).
+
 When optional flags are present, the ingestor ORs them across each bucket window (15s live, 15m interval). If any message in an interval has `r17Exclude=1` or `kyzInvalidAlarm=1`, the finalized interval row stores that flag as `1`.

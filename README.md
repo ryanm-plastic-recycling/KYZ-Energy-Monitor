@@ -41,6 +41,14 @@ d=42,1234567
 
 When minimal payloads are used, the ingestor computes `intervalEnd`, `kWh`, `kW`, and optional `total_kWh` from server time and KYZ scaling settings. Optional `r17Exclude` and `kyzInvalidAlarm` flags can be provided in minimal JSON or packed key/value payloads; the ingestor ORs each flag across the full 15-minute interval bucket so any `1` in the bucket persists as `1` in `dbo.KYZ_Interval`.
 
+### Units (important)
+
+- `KYZ_PULSES_PER_KWH` is **pulses per kWh** (not kWh per pulse).
+- Server conversion is: `kWh = pulseCount / KYZ_PULSES_PER_KWH`.
+- If your PLC is configured as `1 pulse = 1.7 kWh`, set `KYZ_PULSES_PER_KWH=0.5882352941` (that is `1 / 1.7`).
+- A pulse is an energy quantum (kWh).
+- kW is derived from energy over the bucket duration (`kW = kWh * 3600 / bucket_seconds`).
+
 ## Architecture
 
 - MQTT ingestor (`main.py`) writes idempotent intervals into `dbo.KYZ_Interval`.
@@ -124,7 +132,7 @@ The dashboard health endpoint (`/api/health`) reports `credentialMode` as `"ro"`
 
 For minimal payload mode, configure:
 
-- `KYZ_PULSES_PER_KWH` (**required** for minimal payloads)
+- `KYZ_PULSES_PER_KWH` (**required** for minimal payloads, units: pulses per kWh)
 - `KYZ_INTERVAL_MINUTES` (default `15`)
 - `KYZ_INTERVAL_GRACE_SECONDS` (default `30`)
 
