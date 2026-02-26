@@ -154,7 +154,41 @@ def _parse_int_field(payload: dict[str, Any], *field_names: str, required: bool 
     return None
 
 
-def parse_packed_pulse_payload(raw_payload: str) -> tuple[int, int | None]:
+def _parse_bool_field(payload: dict[str, Any], *field_names: str, required: bool = False) -> bool | None:
+    true_values = {"1", "true", "yes", "on"}
+    false_values = {"0", "false", "no", "off"}
+
+    for name in field_names:
+        if name in payload:
+            value = payload[name]
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, int):
+                if value in (0, 1):
+                    return bool(value)
+                raise ValueError(f"{name} must be a boolean-like value")
+            if isinstance(value, str):
+                normalized = value.strip().lower()
+                if normalized in true_values:
+                    return True
+                if normalized in false_values:
+                    return False
+            raise ValueError(f"{name} must be a boolean-like value")
+
+    if required:
+        raise ValueError(f"Missing required payload field: {field_names[0]}")
+    return None
+
+
+def _or_optional_bool(existing: bool | None, incoming: bool | None) -> bool | None:
+    if incoming is None:
+        return existing
+    if existing is None:
+        return incoming
+    return existing or incoming
+
+
+def parse_packed_pulse_payload(raw_payload: str) -> tuple[int, int | None, bool | None, bool | None]:
     tokens = [part.strip() for part in raw_payload.split(",") if part.strip()]
     if not tokens:
         raise ValueError("Empty key/value payload")
@@ -168,7 +202,9 @@ def parse_packed_pulse_payload(raw_payload: str) -> tuple[int, int | None]:
 
     delta = _parse_int_field(parsed, "d", "pulseDelta")
     total = _parse_int_field(parsed, "c", "pulseTotal", "t", required=False)
-    return delta, total
+    r17_exclude = _parse_bool_field(parsed, "r17Exclude")
+    kyz_invalid_alarm = _parse_bool_field(parsed, "kyzInvalidAlarm")
+    return delta, total, r17_exclude, kyz_invalid_alarm
 
 
 def bucket_end(timestamp: datetime, bucket_seconds: int) -> datetime:
@@ -354,8 +390,8 @@ class MqttSqlService:
         if self.pulses_per_kwh <= 0:
             raise ConfigError("KYZ_PULSES_PER_KWH must be greater than zero")
 
-        self.live_buckets: dict[datetime, int] = {}
-        self.interval_buckets: dict[datetime, int] = {}
+        self.live_buckets: dict[datetime, dict[str, Any]] = {}
+        self.interval_buckets: dict[datetime, dict[str, Any]] = {}
         self.last_total_pulses: int | None = None
         self.last_total_kwh: float | None = None
         self.last_finalize_log: dict[str, float] = {"live": 0.0, "interval": 0.0}
@@ -393,11 +429,32 @@ class MqttSqlService:
             self.logger.info(message, *args)
             self.last_finalize_log[key] = now_monotonic
 
-    def _queue_bucket(self, receive_time: datetime, pulse_delta: int, pulse_total: int | None) -> None:
+    def _queue_bucket(
+        self,
+        receive_time: datetime,
+        pulse_delta: int,
+        pulse_total: int | None,
+        r17_exclude: bool | None,
+        kyz_invalid_alarm: bool | None,
+    ) -> None:
         live_end = bucket_end(receive_time, self.live_window_seconds)
         interval_end = bucket_end(receive_time, self.interval_seconds)
-        self.live_buckets[live_end] = self.live_buckets.get(live_end, 0) + pulse_delta
-        self.interval_buckets[interval_end] = self.interval_buckets.get(interval_end, 0) + pulse_delta
+
+        live_bucket = self.live_buckets.setdefault(
+            live_end,
+            {"pulseCount": 0, "r17Exclude": None, "kyzInvalidAlarm": None},
+        )
+        interval_bucket = self.interval_buckets.setdefault(
+            interval_end,
+            {"pulseCount": 0, "r17Exclude": None, "kyzInvalidAlarm": None},
+        )
+
+        live_bucket["pulseCount"] += pulse_delta
+        interval_bucket["pulseCount"] += pulse_delta
+        live_bucket["r17Exclude"] = _or_optional_bool(live_bucket["r17Exclude"], r17_exclude)
+        interval_bucket["r17Exclude"] = _or_optional_bool(interval_bucket["r17Exclude"], r17_exclude)
+        live_bucket["kyzInvalidAlarm"] = _or_optional_bool(live_bucket["kyzInvalidAlarm"], kyz_invalid_alarm)
+        interval_bucket["kyzInvalidAlarm"] = _or_optional_bool(interval_bucket["kyzInvalidAlarm"], kyz_invalid_alarm)
 
         if pulse_total is not None:
             self.last_total_kwh = pulse_total / self.pulses_per_kwh
@@ -405,7 +462,8 @@ class MqttSqlService:
     def _flush_closed_buckets(self, now: datetime) -> None:
         closed_live = sorted(end for end in self.live_buckets if end <= now)
         for sample_end in closed_live:
-            pulse_count = self.live_buckets.pop(sample_end)
+            bucket = self.live_buckets.pop(sample_end)
+            pulse_count = bucket["pulseCount"]
             metrics = compute_energy_metrics(pulse_count, self.pulses_per_kwh, self.live_window_seconds, None)
             payload = {"sampleEnd": sample_end, **metrics, "total_kWh": self.last_total_kwh}
             inserted = self.ingestor.insert_live(payload)
@@ -420,7 +478,8 @@ class MqttSqlService:
 
         closed_interval = sorted(end for end in self.interval_buckets if end <= now)
         for interval_end in closed_interval:
-            pulse_count = self.interval_buckets.pop(interval_end)
+            bucket = self.interval_buckets.pop(interval_end)
+            pulse_count = bucket["pulseCount"]
             metrics = compute_energy_metrics(pulse_count, self.pulses_per_kwh, self.interval_seconds, None)
             payload = {
                 "intervalEnd": interval_end,
@@ -428,8 +487,8 @@ class MqttSqlService:
                 "kWh": metrics["kWh"],
                 "kW": metrics["kW"],
                 "total_kWh": self.last_total_kwh,
-                "r17Exclude": None,
-                "kyzInvalidAlarm": None,
+                "r17Exclude": bucket["r17Exclude"],
+                "kyzInvalidAlarm": bucket["kyzInvalidAlarm"],
             }
             inserted = self.ingestor.insert_interval(payload)
             if inserted:
@@ -442,11 +501,16 @@ class MqttSqlService:
                 )
 
     def _process_packed_payload(self, raw_payload: str, topic: str, receive_time: datetime) -> None:
-        pulse_delta, pulse_total = parse_packed_pulse_payload(raw_payload)
+        pulse_delta, pulse_total, r17_exclude, kyz_invalid_alarm = parse_packed_pulse_payload(raw_payload)
         if pulse_total is not None:
             if self.last_total_pulses is not None and pulse_total == self.last_total_pulses:
-                self.logger.warning("Duplicate packed payload ignored on topic %s total=%s", topic, pulse_total)
-                return
+                if pulse_delta != 0:
+                    self.logger.warning(
+                        "Duplicate packed payload on topic %s total=%s; zeroing pulse delta for state update",
+                        topic,
+                        pulse_total,
+                    )
+                pulse_delta = 0
             if self.last_total_pulses is not None and pulse_total < self.last_total_pulses:
                 self.logger.warning(
                     "Pulse total decreased on topic %s (prev=%s new=%s). Treating as PLC reset.",
@@ -458,7 +522,7 @@ class MqttSqlService:
         else:
             self.logger.warning("Packed payload missing total pulse counter on topic %s; dedupe unavailable", topic)
 
-        self._queue_bucket(receive_time, pulse_delta, pulse_total)
+        self._queue_bucket(receive_time, pulse_delta, pulse_total, r17_exclude, kyz_invalid_alarm)
         self._flush_closed_buckets(receive_time)
 
     def on_message(self, client: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage) -> None:
@@ -481,7 +545,13 @@ class MqttSqlService:
             if any(field in payload for field in ["d", "pulseDelta", "c", "pulseTotal", "t"]):
                 pulse_delta = _parse_int_field(payload, "d", "pulseDelta")
                 pulse_total = _parse_int_field(payload, "c", "pulseTotal", "t", required=False)
+                r17_exclude = _parse_bool_field(payload, "r17Exclude")
+                kyz_invalid_alarm = _parse_bool_field(payload, "kyzInvalidAlarm")
                 packed_raw = f"d={pulse_delta}" + (f",c={pulse_total}" if pulse_total is not None else "")
+                if r17_exclude is not None:
+                    packed_raw += f",r17Exclude={1 if r17_exclude else 0}"
+                if kyz_invalid_alarm is not None:
+                    packed_raw += f",kyzInvalidAlarm={1 if kyz_invalid_alarm else 0}"
                 self._process_packed_payload(packed_raw, msg.topic, receive_time)
                 return
 

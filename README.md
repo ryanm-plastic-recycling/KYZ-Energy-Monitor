@@ -18,7 +18,7 @@ The ingestor accepts `pri/energy/kyz/interval` in either full or minimal format:
 - Minimal JSON:
 
 ```json
-{"d":42,"t":1234567}
+{"d":42,"t":1234567,"r17Exclude":1,"kyzInvalidAlarm":0}
 ```
 
 Also accepted:
@@ -30,7 +30,7 @@ Also accepted:
 - Key/value string:
 
 ```text
-d=42,t=1234567
+d=42,t=1234567,r17Exclude=1,kyzInvalidAlarm=0
 ```
 
 Legacy variant also accepted:
@@ -39,7 +39,7 @@ Legacy variant also accepted:
 d=42,1234567
 ```
 
-When minimal payloads are used, the ingestor computes `intervalEnd`, `kWh`, `kW`, and optional `total_kWh` from server time and KYZ scaling settings.
+When minimal payloads are used, the ingestor computes `intervalEnd`, `kWh`, `kW`, and optional `total_kWh` from server time and KYZ scaling settings. Optional `r17Exclude` and `kyzInvalidAlarm` flags can be provided in minimal JSON or packed key/value payloads; the ingestor ORs each flag across the full 15-minute interval bucket so any `1` in the bucket persists as `1` in `dbo.KYZ_Interval`.
 
 ## Architecture
 
