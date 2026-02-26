@@ -61,11 +61,28 @@ body {
   font-family: Inter, 'Segoe UI', Roboto, Arial, sans-serif;
   color: var(--text);
   background: var(--bg-gradient);
+  position: relative;
+}
+
+html[data-theme='light'] body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background-image: url('/PRIfront.png');
+  background-repeat: no-repeat;
+  background-size: cover;
+  background-position: center 70%;
+  opacity: 0.08;
+  filter: saturate(0.75) contrast(0.95) brightness(1.05);
 }
 
 .page, .kiosk {
   min-height: 100vh;
   padding: 0 var(--space-4) var(--space-4);
+  position: relative;
+  z-index: 1;
 }
 
 .header {

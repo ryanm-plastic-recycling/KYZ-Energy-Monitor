@@ -1,12 +1,20 @@
-const priEnv = import.meta.env.VITE_PRI_LOGO_URL
-const innovEnv = import.meta.env.VITE_INNOVATION_LOGO_URL
+function normalizeAssetUrl(raw: string | undefined): string | null {
+  if (!raw) return null
 
-export const PRI_LOGO_SRC =
-  priEnv && priEnv.length > 0
-    ? priEnv
-    : '/pri-logo-vector.png'
+  const trimmed = raw.trim()
+  if (!trimmed) return null
+  if (/^https?:\/\//i.test(trimmed)) return trimmed
 
-export const INNOV_LOGO_SRC =
-  innovEnv && innovEnv.length > 0
-    ? innovEnv
-    : '/Innovation%20Triangle%20-%20avatar.png'
+  let path = trimmed.replace(/\\/g, '/').replace(/^\.\//, '')
+  if (path.toLowerCase().startsWith('public/')) path = path.slice('public/'.length)
+  if (!path.startsWith('/')) path = `/${path}`
+
+  return path
+}
+
+const priEnv = normalizeAssetUrl(import.meta.env.VITE_PRI_LOGO_URL)
+const innovEnv = normalizeAssetUrl(import.meta.env.VITE_INNOVATION_LOGO_URL)
+
+export const PRI_LOGO_SRC = priEnv ?? '/pri-logo-vector.png'
+
+export const INNOV_LOGO_SRC = innovEnv ?? '/Innovation%20Triangle%20-%20avatar.png'

@@ -895,3 +895,22 @@ def serve_kiosk() -> FileResponse:
     if index_file.exists():
         return FileResponse(index_file)
     return FileResponse(Path(__file__).parent / "placeholder.html")
+
+
+@app.get('/{full_path:path}')
+def serve_spa_or_static(full_path: str) -> FileResponse:
+    requested = full_path.lstrip('/')
+    if requested == 'api' or requested.startswith('api/'):
+        raise HTTPException(status_code=404, detail='Not Found')
+
+    if static_dir.exists() and requested:
+        candidate = (static_dir / requested).resolve()
+        static_root = static_dir.resolve()
+        if static_root == candidate or static_root in candidate.parents:
+            if candidate.is_file():
+                return FileResponse(candidate)
+
+    index_file = static_dir / 'index.html'
+    if index_file.exists():
+        return FileResponse(index_file)
+    return FileResponse(Path(__file__).parent / 'placeholder.html')
