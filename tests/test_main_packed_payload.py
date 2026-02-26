@@ -1,7 +1,12 @@
 import pytest
 from datetime import datetime
 
-from main import bucket_end, compute_energy_metrics, parse_packed_pulse_payload
+from main import (
+    bucket_end,
+    compute_effective_pulse_delta,
+    compute_energy_metrics,
+    parse_packed_pulse_payload,
+)
 
 
 def test_parse_packed_payload_accepts_expected_fields() -> None:
@@ -33,6 +38,25 @@ def test_parse_packed_payload_parses_optional_flags() -> None:
     assert kyz_invalid_alarm is False
 
 
+def test_parse_packed_payload_accepts_total_only() -> None:
+    delta, total, _, _ = parse_packed_pulse_payload("c=123")
+
+    assert delta is None
+    assert total == 123
+
+
+def test_parse_packed_payload_accepts_delta_only() -> None:
+    delta, total, _, _ = parse_packed_pulse_payload("d=7")
+
+    assert delta == 7
+    assert total is None
+
+
+def test_parse_packed_payload_rejects_missing_delta_and_total() -> None:
+    with pytest.raises(ValueError, match="at least one"):
+        parse_packed_pulse_payload("r17Exclude=1")
+
+
 
 
 def test_parse_packed_payload_parses_boolean_string_variants() -> None:
@@ -42,6 +66,34 @@ def test_parse_packed_payload_parses_boolean_string_variants() -> None:
 
     assert r17_exclude is True
     assert kyz_invalid_alarm is False
+
+
+def test_effective_delta_prefers_total_delta_when_available() -> None:
+    effective_delta, new_last_total = compute_effective_pulse_delta(0, 108, 100)
+
+    assert effective_delta == 8
+    assert new_last_total == 108
+
+
+def test_effective_delta_avoids_double_count_for_duplicate_total() -> None:
+    effective_delta, new_last_total = compute_effective_pulse_delta(5, 200, 200)
+
+    assert effective_delta == 0
+    assert new_last_total == 200
+
+
+def test_effective_delta_falls_back_to_delta_when_total_missing() -> None:
+    effective_delta, new_last_total = compute_effective_pulse_delta(3, None, 200)
+
+    assert effective_delta == 3
+    assert new_last_total == 200
+
+
+def test_effective_delta_handles_total_counter_reset() -> None:
+    effective_delta, new_last_total = compute_effective_pulse_delta(9, 80, 100)
+
+    assert effective_delta == 0
+    assert new_last_total == 80
 
 def test_bucket_end_aligns_to_boundary() -> None:
     t1 = datetime(2025, 1, 1, 12, 0, 14)
