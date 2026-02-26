@@ -188,7 +188,7 @@ def _or_optional_bool(existing: bool | None, incoming: bool | None) -> bool | No
     return existing or incoming
 
 
-def parse_packed_pulse_payload(raw_payload: str) -> tuple[int, int | None, bool | None, bool | None]:
+def parse_packed_pulse_payload(raw_payload: str) -> tuple[int | None, int | None, bool | None, bool | None]:
     tokens = [part.strip() for part in raw_payload.split(",") if part.strip()]
     if not tokens:
         raise ValueError("Empty key/value payload")
@@ -200,11 +200,32 @@ def parse_packed_pulse_payload(raw_payload: str) -> tuple[int, int | None, bool 
         key, value = token.split("=", 1)
         parsed[key.strip()] = value.strip()
 
-    delta = _parse_int_field(parsed, "d", "pulseDelta")
+    delta = _parse_int_field(parsed, "d", "pulseDelta", required=False)
     total = _parse_int_field(parsed, "c", "pulseTotal", "t", required=False)
+    if delta is None and total is None:
+        raise ValueError("Packed payload must include at least one of d/pulseDelta or c/pulseTotal/t")
     r17_exclude = _parse_bool_field(parsed, "r17Exclude")
     kyz_invalid_alarm = _parse_bool_field(parsed, "kyzInvalidAlarm")
     return delta, total, r17_exclude, kyz_invalid_alarm
+
+
+def compute_effective_pulse_delta(
+    pulse_delta: int | None,
+    pulse_total: int | None,
+    last_total_pulses: int | None,
+) -> tuple[int, int | None]:
+    if pulse_total is not None:
+        if last_total_pulses is None:
+            return max(pulse_delta or 0, 0), pulse_total
+        total_delta = pulse_total - last_total_pulses
+        if total_delta < 0:
+            return 0, pulse_total
+        return total_delta, pulse_total
+
+    if pulse_delta is not None:
+        return max(pulse_delta, 0), last_total_pulses
+
+    return 0, last_total_pulses
 
 
 def bucket_end(timestamp: datetime, bucket_seconds: int) -> datetime:
@@ -400,6 +421,8 @@ class MqttSqlService:
         self.last_total_pulses: int | None = None
         self.last_total_kwh: float | None = None
         self.last_finalize_log: dict[str, float] = {"live": 0.0, "interval": 0.0}
+        self.last_delta_mismatch_log_monotonic = 0.0
+        self.last_missing_counter_log_monotonic = 0.0
 
         self.client = mqtt.Client(
             mqtt.CallbackAPIVersion.VERSION2,
@@ -464,6 +487,69 @@ class MqttSqlService:
         if pulse_total is not None:
             self.last_total_kwh = pulse_total / self.pulses_per_kwh
 
+    def _rate_limited_warning(self, key: str, message: str, *args: Any) -> None:
+        now_monotonic = time.monotonic()
+        attr_name = f"last_{key}_log_monotonic"
+        last_logged = getattr(self, attr_name)
+        if now_monotonic - last_logged >= 30:
+            self.logger.warning(message, *args)
+            setattr(self, attr_name, now_monotonic)
+
+    def _process_pulse_update(
+        self,
+        pulse_delta: int | None,
+        pulse_total: int | None,
+        r17_exclude: bool | None,
+        kyz_invalid_alarm: bool | None,
+        topic: str,
+        receive_time: datetime,
+    ) -> None:
+        if pulse_delta is None and pulse_total is None:
+            self._rate_limited_warning(
+                "missing_counter",
+                "Dropping payload on topic %s because both pulse delta and total are missing",
+                topic,
+            )
+            return
+
+        prior_total = self.last_total_pulses
+        effective_delta, new_last_total = compute_effective_pulse_delta(pulse_delta, pulse_total, prior_total)
+
+        if pulse_total is not None and prior_total is not None and pulse_delta is not None:
+            total_delta = pulse_total - prior_total
+            expected_delta = max(total_delta, 0)
+            if pulse_delta != expected_delta:
+                self._rate_limited_warning(
+                    "delta_mismatch",
+                    "Pulse delta mismatch on topic %s: d=%s while Δc=%s (prev_total=%s new_total=%s)",
+                    topic,
+                    pulse_delta,
+                    expected_delta,
+                    prior_total,
+                    pulse_total,
+                )
+
+        if pulse_total is not None and prior_total is not None and pulse_total < prior_total:
+            self.logger.warning(
+                "Pulse total decreased on topic %s (prev=%s new=%s). Treating as PLC reset.",
+                topic,
+                prior_total,
+                pulse_total,
+            )
+
+        if new_last_total is not None:
+            self.last_total_pulses = new_last_total
+
+        if pulse_total is None and pulse_delta is not None:
+            self._rate_limited_warning(
+                "missing_counter",
+                "Pulse total missing on topic %s; falling back to pulse delta",
+                topic,
+            )
+
+        self._queue_bucket(receive_time, effective_delta, pulse_total, r17_exclude, kyz_invalid_alarm)
+        self._flush_closed_buckets(receive_time)
+
     def _flush_closed_buckets(self, now: datetime) -> None:
         closed_live = sorted(end for end in self.live_buckets if end <= now)
         for sample_end in closed_live:
@@ -507,28 +593,14 @@ class MqttSqlService:
 
     def _process_packed_payload(self, raw_payload: str, topic: str, receive_time: datetime) -> None:
         pulse_delta, pulse_total, r17_exclude, kyz_invalid_alarm = parse_packed_pulse_payload(raw_payload)
-        if pulse_total is not None:
-            if self.last_total_pulses is not None and pulse_total == self.last_total_pulses:
-                if pulse_delta != 0:
-                    self.logger.warning(
-                        "Duplicate packed payload on topic %s total=%s; zeroing pulse delta for state update",
-                        topic,
-                        pulse_total,
-                    )
-                pulse_delta = 0
-            if self.last_total_pulses is not None and pulse_total < self.last_total_pulses:
-                self.logger.warning(
-                    "Pulse total decreased on topic %s (prev=%s new=%s). Treating as PLC reset.",
-                    topic,
-                    self.last_total_pulses,
-                    pulse_total,
-                )
-            self.last_total_pulses = pulse_total
-        else:
-            self.logger.warning("Packed payload missing total pulse counter on topic %s; dedupe unavailable", topic)
-
-        self._queue_bucket(receive_time, pulse_delta, pulse_total, r17_exclude, kyz_invalid_alarm)
-        self._flush_closed_buckets(receive_time)
+        self._process_pulse_update(
+            pulse_delta=pulse_delta,
+            pulse_total=pulse_total,
+            r17_exclude=r17_exclude,
+            kyz_invalid_alarm=kyz_invalid_alarm,
+            topic=topic,
+            receive_time=receive_time,
+        )
 
     def on_message(self, client: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage) -> None:
         raw_payload = msg.payload.decode("utf-8", errors="replace")
@@ -548,16 +620,20 @@ class MqttSqlService:
                 return
 
             if any(field in payload for field in ["d", "pulseDelta", "c", "pulseTotal", "t"]):
-                pulse_delta = _parse_int_field(payload, "d", "pulseDelta")
+                pulse_delta = _parse_int_field(payload, "d", "pulseDelta", required=False)
                 pulse_total = _parse_int_field(payload, "c", "pulseTotal", "t", required=False)
+                if pulse_delta is None and pulse_total is None:
+                    raise ValueError("JSON payload must include at least one of d/pulseDelta or c/pulseTotal/t")
                 r17_exclude = _parse_bool_field(payload, "r17Exclude")
                 kyz_invalid_alarm = _parse_bool_field(payload, "kyzInvalidAlarm")
-                packed_raw = f"d={pulse_delta}" + (f",c={pulse_total}" if pulse_total is not None else "")
-                if r17_exclude is not None:
-                    packed_raw += f",r17Exclude={1 if r17_exclude else 0}"
-                if kyz_invalid_alarm is not None:
-                    packed_raw += f",kyzInvalidAlarm={1 if kyz_invalid_alarm else 0}"
-                self._process_packed_payload(packed_raw, msg.topic, receive_time)
+                self._process_pulse_update(
+                    pulse_delta=pulse_delta,
+                    pulse_total=pulse_total,
+                    r17_exclude=r17_exclude,
+                    kyz_invalid_alarm=kyz_invalid_alarm,
+                    topic=msg.topic,
+                    receive_time=receive_time,
+                )
                 return
 
             raise ValueError("Unsupported JSON payload shape")
