@@ -38,8 +38,8 @@ html[data-theme='light'] {
   --border: rgba(35, 71, 104, 0.18);
   --text: #0f2237;
   --muted: #4a617c;
-  --brand: #234768;
-  --brand2: #3a5f87;
+  --brand: rgb(37,64,143);
+  --brand2: rgb(37,64,143);
   --good: #1f8f5a;
   --warn: #b77700;
   --bad: #c73f45;
