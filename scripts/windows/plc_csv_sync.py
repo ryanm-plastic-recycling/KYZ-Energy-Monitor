@@ -2,13 +2,21 @@ import hashlib
 import logging
 import os
 import shutil
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pyodbc
 from dotenv import load_dotenv
 
-from plc_csv import parse_plc_csv
+# --- Ensure repo root is importable when run via Task Scheduler ---
+# Task Scheduler executes: python.exe scripts\windows\plc_csv_sync.py
+# In that case, sys.path[0] is scripts\windows, NOT the repo root.
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from plc_csv import parse_plc_csv  # noqa: E402
 
 
 class ConfigError(Exception):
@@ -16,7 +24,7 @@ class ConfigError(Exception):
 
 
 def get_repo_root() -> Path:
-    return Path(__file__).resolve().parents[2]
+    return REPO_ROOT
 
 
 def configure_logging(repo_root: Path) -> logging.Logger:
@@ -80,14 +88,15 @@ def compute_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def file_mtime_utc(path: Path) -> datetime:
-    return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).replace(tzinfo=None)
+def normalize_dt_to_millis(dt: datetime) -> datetime:
+    """Match SQL DATETIME2(3) precision to avoid perpetual 'mtime mismatch'."""
+    return dt.replace(microsecond=(dt.microsecond // 1000) * 1000)
 
 
 def get_log_row(cursor: pyodbc.Cursor, file_path: str) -> tuple | None:
     cursor.execute(
         """
-        SELECT FileSizeBytes, LastWriteTimeUtc, Sha256, Status
+        SELECT FileSizeBytes, LastWriteTimeUtc, Sha256, IngestStatus
         FROM dbo.KYZ_PlcCsvIngestLog
         WHERE FilePath = ?
         """,
@@ -164,8 +173,8 @@ def upsert_ingest_log(
                 ? AS LastWriteTimeUtc,
                 ? AS Sha256,
                 ? AS ProcessedAtUtc,
-                ? AS Status,
-                ? AS RowCount,
+                ? AS IngestStatus,
+                ? AS IngestRowCount,
                 ? AS IntervalMin,
                 ? AS IntervalMax,
                 ? AS ErrorMessage
@@ -176,14 +185,14 @@ def upsert_ingest_log(
             LastWriteTimeUtc = source.LastWriteTimeUtc,
             Sha256 = source.Sha256,
             ProcessedAtUtc = source.ProcessedAtUtc,
-            Status = source.Status,
-            RowCount = source.RowCount,
+            IngestStatus = source.IngestStatus,
+            IngestRowCount = source.IngestRowCount,
             IntervalMin = source.IntervalMin,
             IntervalMax = source.IntervalMax,
             ErrorMessage = source.ErrorMessage
         WHEN NOT MATCHED THEN
-            INSERT (FilePath, FileSizeBytes, LastWriteTimeUtc, Sha256, ProcessedAtUtc, Status, RowCount, IntervalMin, IntervalMax, ErrorMessage)
-            VALUES (source.FilePath, source.FileSizeBytes, source.LastWriteTimeUtc, source.Sha256, source.ProcessedAtUtc, source.Status, source.RowCount, source.IntervalMin, source.IntervalMax, source.ErrorMessage);
+            INSERT (FilePath, FileSizeBytes, LastWriteTimeUtc, Sha256, ProcessedAtUtc, IngestStatus, IngestRowCount, IntervalMin, IntervalMax, ErrorMessage)
+            VALUES (source.FilePath, source.FileSizeBytes, source.LastWriteTimeUtc, source.Sha256, source.ProcessedAtUtc, source.IngestStatus, source.IngestRowCount, source.IntervalMin, source.IntervalMax, source.ErrorMessage);
         """,
         file_path,
         file_size,
@@ -204,11 +213,15 @@ def main() -> int:
     load_dotenv(repo_root / ".env")
 
     try:
-        drop_dir = Path(os.getenv("PLC_CSV_DROP_DIR", str(repo_root / "plc_csv_drop")))
-        glob_pattern = os.getenv("PLC_CSV_GLOB", "*.csv")
+        drop_dir_raw = os.getenv("PLC_CSV_DROP_DIR")
+        drop_dir = Path(drop_dir_raw) if drop_dir_raw else (repo_root / "plc_csv_drop")
+
+        glob_pattern = os.getenv("PLC_CSV_GLOB") or "*.csv"
         min_age_seconds = get_env_int("PLC_CSV_MIN_AGE_SECONDS", 10)
         move_to_archive = get_env_bool("PLC_CSV_MOVE_TO_ARCHIVE", False)
-        archive_dir = Path(os.getenv("PLC_CSV_ARCHIVE_DIR", str(drop_dir / "archive")))
+
+        archive_dir_raw = os.getenv("PLC_CSV_ARCHIVE_DIR")
+        archive_dir = Path(archive_dir_raw) if archive_dir_raw else (drop_dir / "archive")
 
         if not drop_dir.exists():
             raise ConfigError(f"PLC CSV drop directory does not exist: {drop_dir}")
@@ -231,7 +244,7 @@ def main() -> int:
                     continue
 
                 size = file_path.stat().st_size
-                mtime_utc = mtime_aware.replace(tzinfo=None)
+                mtime_utc = normalize_dt_to_millis(mtime_aware).replace(tzinfo=None)  # stored as UTC-naive
                 file_str = str(file_path.resolve())
                 sha256 = compute_sha256(file_path)
                 existing = get_log_row(cursor, file_str)
@@ -245,9 +258,12 @@ def main() -> int:
 
                 try:
                     rows = parse_plc_csv(file_path)
+
                     upsert_intervals(cursor, rows)
+
                     interval_min = rows[0]["IntervalEnd"] if rows else None
                     interval_max = rows[-1]["IntervalEnd"] if rows else None
+
                     upsert_ingest_log(
                         cursor,
                         file_path=file_str,
@@ -260,6 +276,7 @@ def main() -> int:
                         interval_max=interval_max,
                         error_message=None,
                     )
+
                     conn.commit()
                     processed += 1
                     logger.info(
@@ -278,11 +295,13 @@ def main() -> int:
                             destination = archive_dir / f"{file_path.stem}_{timestamp_suffix}{file_path.suffix}"
                         shutil.move(str(file_path), str(destination))
                         logger.info("Moved %s -> %s", file_path, destination)
+
                 except Exception as exc:  # noqa: BLE001
                     conn.rollback()
                     errored += 1
                     error_text = str(exc)
                     logger.exception("Failed processing %s: %s", file_path, error_text)
+
                     upsert_ingest_log(
                         cursor,
                         file_path=file_str,
