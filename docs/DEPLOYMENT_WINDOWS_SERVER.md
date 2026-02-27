@@ -23,6 +23,7 @@ Set at minimum:
 - `MQTT_HOST` (and optional MQTT credentials)
 - Dashboard listener: `DASHBOARD_HOST`, `DASHBOARD_PORT`
 - Optional dashboard auth: `DASHBOARD_AUTH_TOKEN`
+- PLC CSV ingest folder settings: `PLC_CSV_DROP_DIR` (or use default `plc_csv_drop`)
 
 ## 3) Install ingestor + dashboard
 
@@ -39,11 +40,12 @@ cd C:\apps\kyz-energy-monitor
 .\scripts\windows\create_taskscheduler_jobs.ps1 -RunNow
 ```
 
-This creates startup/daily tasks:
+This creates startup/daily/hourly tasks:
 - `KYZ-Ingestor`
 - `KYZ-Dashboard-API`
 - `KYZ-Live15s-Retention` (daily 02:05)
 - `KYZ-MonthlyDemand-Refresh` (daily 02:10)
+- `KYZ-PLC-CSV-Sync` (hourly)
 
 ## 5) Verify service health
 
@@ -65,3 +67,10 @@ If auth is enabled:
 
 
 For access outside the building, open the configured `DASHBOARD_PORT` in Windows Firewall and configure router/NAT forwarding to this host. Use `DASHBOARD_AUTH_TOKEN` for protection.
+
+
+Create the PLC drop folder if you use the default path:
+
+```powershell
+New-Item -ItemType Directory -Force C:\apps\kyz-energy-monitor\plc_csv_drop
+```

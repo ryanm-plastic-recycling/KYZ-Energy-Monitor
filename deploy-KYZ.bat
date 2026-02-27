@@ -20,6 +20,7 @@ set "TASK_INGESTOR=KYZ-Ingestor"
 set "TASK_DASH=KYZ-Dashboard-API"
 set "TASK_RETENTION=KYZ-Live15s-Retention"
 set "TASK_MONTHLY=KYZ-MonthlyDemand-Refresh"
+set "TASK_PLC_SYNC=KYZ-PLC-CSV-Sync"
 
 REM Legacy task names from older iterations (best-effort stop)
 set "TASK_INGESTOR_LEGACY=KYZ Ingestor"
@@ -36,6 +37,7 @@ set "KILLPAT_INGESTOR=*%DST%\.venv\Scripts\python.exe*main.py*"
 set "KILLPAT_DASH=*%DST%\dashboard\api\.venv\Scripts\python.exe*-m dashboard.api.run_server*"
 set "KILLPAT_RETENTION=*%DST%\.venv\Scripts\python.exe*purge_live15s.py*"
 set "KILLPAT_MONTHLY=*%DST%\.venv\Scripts\python.exe*refresh_monthly_demand.py*"
+set "KILLPAT_PLC_SYNC=*%DST%\.venv\Scripts\python.exe*plc_csv_sync.py*"
 
 echo.
 echo =========================================================
@@ -77,6 +79,7 @@ if errorlevel 1 set "RC=1" & goto :END
 REM Stop short tasks too (best effort; do not fail deploy if they don't exist)
 call :StopTask "%TASK_RETENTION%" "%KILLPAT_RETENTION%"
 call :StopTask "%TASK_MONTHLY%" "%KILLPAT_MONTHLY%"
+call :StopTask "%TASK_PLC_SYNC%" "%KILLPAT_PLC_SYNC%"
 
 REM Stop legacy tasks if they exist (best effort)
 call :StopTask "%TASK_INGESTOR_LEGACY%" "%KILLPAT_INGESTOR%"

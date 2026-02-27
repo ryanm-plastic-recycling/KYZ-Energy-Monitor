@@ -62,6 +62,7 @@ This application does not run DDL automatically. Apply SQL scripts manually:
 - `sql/001_create_table.sql`
 - `sql/002_indexes.sql`
 - `sql/003_dashboard_views.sql`
+- `sql/010_plc_csv_ingest_log.sql`
 
 ## Windows 11 deployment quickstart (PowerShell)
 
@@ -115,6 +116,29 @@ Set `DASHBOARD_HOST`/`DASHBOARD_PORT` in `.env` to control where the dashboard l
 Open:
 - `http://localhost:<DASHBOARD_PORT>/`
 - `http://localhost:<DASHBOARD_PORT>/kiosk?refresh=10&theme=dark`
+
+
+## PLC CSV authoritative backfill
+
+`dbo.KYZ_Interval` remains the canonical interval table for dashboard/billing queries. MQTT still inserts near-real-time interval rows, but PLC CSV imports are authoritative and will upsert (insert or overwrite) the same `IntervalEnd` records when CSV files arrive.
+
+Workflow:
+- Drop PLC CSV files into `PLC_CSV_DROP_DIR` (defaults to `plc_csv_drop` under repo root).
+- Scheduled task `KYZ-PLC-CSV-Sync` runs hourly and imports only new/changed files (size/mtime/hash tracked in `dbo.KYZ_PlcCsvIngestLog`).
+- Optional archive move can be enabled after successful import.
+
+PLC CSV env vars:
+- `PLC_CSV_DROP_DIR` (optional; default `repo_root/plc_csv_drop`)
+- `PLC_CSV_GLOB` (optional; default `*.csv`)
+- `PLC_CSV_MIN_AGE_SECONDS` (optional; default `10`)
+- `PLC_CSV_MOVE_TO_ARCHIVE` (optional; default `false`)
+- `PLC_CSV_ARCHIVE_DIR` (optional; used when move-to-archive is enabled)
+
+Run manually:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\windows\plc_csv_sync.py
+```
 
 ## SQL credential model (ingestor vs dashboard)
 

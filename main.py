@@ -357,8 +357,8 @@ class IntervalIngestor:
             data["kWh"],
             data["kW"],
             data["total_kWh"],
-            None if data.get("r17Exclude") is None else (1 if data["r17Exclude"] else 0),
-            None if data.get("kyzInvalidAlarm") is None else (1 if data["kyzInvalidAlarm"] else 0),
+            1 if data.get("r17Exclude") else 0,
+            1 if data.get("kyzInvalidAlarm") else 0,
             data["intervalEnd"],
         )
         return self._execute_with_retry(sql, params, data["intervalEnd"], "intervalEnd")
