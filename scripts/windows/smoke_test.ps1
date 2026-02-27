@@ -1,11 +1,45 @@
 [CmdletBinding()]
 param(
-    [string]$BaseUrl = 'http://localhost:8080',
+    [string]$BaseUrl = '',
     [int]$FreshnessThresholdSeconds = 1800,
     [string]$AuthToken = ''
 )
 
 $ErrorActionPreference = 'Stop'
+
+
+function Get-EnvValue {
+    param(
+        [Parameter(Mandatory = $true)][string]$EnvPath,
+        [Parameter(Mandatory = $true)][string]$Key
+    )
+
+    if (-not (Test-Path $EnvPath)) {
+        return $null
+    }
+
+    foreach ($line in Get-Content -Path $EnvPath) {
+        $trimmed = $line.Trim()
+        if (-not $trimmed -or $trimmed.StartsWith('#')) { continue }
+        $pair = $trimmed -split '=', 2
+        if ($pair.Length -eq 2 -and $pair[0].Trim() -eq $Key) {
+            return $pair[1].Trim()
+        }
+    }
+
+    return $null
+}
+
+if (-not $BaseUrl) {
+    $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\.." )).Path
+    $envPath = Join-Path $repoRoot '.env'
+    $dashboardPort = Get-EnvValue -EnvPath $envPath -Key 'DASHBOARD_PORT'
+    if (-not $dashboardPort) {
+        $dashboardPort = '8080'
+    }
+    $BaseUrl = "http://localhost:$dashboardPort"
+}
+
 
 $headers = @{}
 if ($AuthToken) {

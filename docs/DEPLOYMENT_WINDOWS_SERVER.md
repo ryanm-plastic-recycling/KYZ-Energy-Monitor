@@ -21,6 +21,7 @@ notepad .env
 Set at minimum:
 - `SQL_SERVER`, `SQL_DATABASE`, `SQL_USERNAME`, `SQL_PASSWORD`
 - `MQTT_HOST` (and optional MQTT credentials)
+- Dashboard listener: `DASHBOARD_HOST`, `DASHBOARD_PORT`
 - Optional dashboard auth: `DASHBOARD_AUTH_TOKEN`
 
 ## 3) Install ingestor + dashboard
@@ -47,13 +48,13 @@ This creates startup/daily tasks:
 ## 5) Verify service health
 
 ```powershell
-.\scripts\windows\smoke_test.ps1 -BaseUrl http://localhost:8080 -FreshnessThresholdSeconds 1800
+.\scripts\windows\smoke_test.ps1 -FreshnessThresholdSeconds 1800
 ```
 
 If auth is enabled:
 
 ```powershell
-.\scripts\windows\smoke_test.ps1 -BaseUrl http://localhost:8080 -AuthToken '<token>' -FreshnessThresholdSeconds 1800
+.\scripts\windows\smoke_test.ps1 -AuthToken '<token>' -FreshnessThresholdSeconds 1800
 ```
 
 ## Notes
@@ -61,3 +62,6 @@ If auth is enabled:
 - Ingestor logs: `logs\kyz_ingestor.log`
 - Dashboard API logs: `logs\dashboard_api.log`
 - Existing SQL table/scripts remain unchanged.
+
+
+For access outside the building, open the configured `DASHBOARD_PORT` in Windows Firewall and configure router/NAT forwarding to this host. Use `DASHBOARD_AUTH_TOKEN` for protection.

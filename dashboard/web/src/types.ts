@@ -124,3 +124,22 @@ export type DailyPoint = {
   kW_peak: number
   interval_count: number
 }
+
+
+export type UsageByDay = {
+  date: string
+  count: number
+}
+
+export type UsageByPath = {
+  path: string
+  count: number
+}
+
+export type UsageSummary = {
+  days: number
+  totalViews: number
+  byDay: UsageByDay[]
+  byPath: UsageByPath[]
+  lastSeen: string | null
+}

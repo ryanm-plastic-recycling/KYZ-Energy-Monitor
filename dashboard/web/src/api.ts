@@ -1,11 +1,22 @@
-import type { BillingResponse, DailyPoint, Health, IntervalSeriesPoint, LatestRow, LiveLatestRow, LiveSeriesPoint, Metrics, Quality, Summary } from './types'
+import type { BillingResponse, DailyPoint, Health, IntervalSeriesPoint, LatestRow, LiveLatestRow, LiveSeriesPoint, Metrics, Quality, Summary, UsageSummary } from './types'
 
 const token = new URLSearchParams(window.location.search).get('token')
 
-async function apiGet<T>(path: string): Promise<T> {
+function authHeaders(): HeadersInit {
   const headers: HeadersInit = {}
   if (token) headers['X-Auth-Token'] = token
-  const res = await fetch(path, { headers })
+  return headers
+}
+
+async function apiGet<T>(path: string): Promise<T> {
+  const res = await fetch(path, { headers: authHeaders() })
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
+  return res.json()
+}
+
+async function apiPost<T>(path: string, body: unknown): Promise<T> {
+  const headers: HeadersInit = { ...authHeaders(), 'Content-Type': 'application/json' }
+  const res = await fetch(path, { method: 'POST', headers, body: JSON.stringify(body) })
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
   return res.json()
 }
@@ -20,10 +31,12 @@ export const client = {
     if (end) params.set('end', end)
     return apiGet<{ points: IntervalSeriesPoint[] }>(`/api/series?${params.toString()}`)
   },
-  liveSeries: (minutes: number) => apiGet<{ points: LiveSeriesPoint[] }>(`/api/live/series?minutes=${minutes}`),
+  liveSeries: (minutes: number) => apiGet<{ points: LiveSeriesPoint[] }>('/api/live/series?minutes=' + minutes),
   summary: () => apiGet<Summary>('/api/summary'),
   billing: (months = 24, basis: 'calendar' | 'billing' = 'calendar') => apiGet<BillingResponse>(`/api/billing?months=${months}&basis=${basis}`),
   quality: () => apiGet<Quality>('/api/quality'),
   metrics: () => apiGet<Metrics>('/api/metrics'),
   daily: (days: number) => apiGet<{ days: DailyPoint[] }>(`/api/daily?days=${days}`),
+  trackPageView: (pathname: string) => apiPost<{ ok: true }>('/api/usage/pageview', { path: pathname }),
+  usageSummary: (days: number) => apiGet<UsageSummary>(`/api/usage/summary?days=${days}`),
 }

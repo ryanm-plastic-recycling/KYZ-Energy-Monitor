@@ -65,7 +65,7 @@ $ingestorExe = Join-Path $RepoRoot ".venv\Scripts\python.exe"
 $dashboardExe = Join-Path $RepoRoot "dashboard\api\.venv\Scripts\python.exe"
 
 Register-OrReplaceTask -Name "KYZ-Ingestor" -Exe $ingestorExe -Arguments "main.py" -Trigger (New-ScheduledTaskTrigger -AtStartup)
-Register-OrReplaceTask -Name "KYZ-Dashboard-API" -Exe $dashboardExe -Arguments "-m uvicorn dashboard.api.app:app --host 0.0.0.0 --port 8080" -Trigger (New-ScheduledTaskTrigger -AtStartup)
+Register-OrReplaceTask -Name "KYZ-Dashboard-API" -Exe $dashboardExe -Arguments "-m dashboard.api.run_server" -Trigger (New-ScheduledTaskTrigger -AtStartup)
 Register-OrReplaceTask -Name "KYZ-Live15s-Retention" -Exe $ingestorExe -Arguments "scripts\windows\purge_live15s.py --retention-days 60" -Trigger (New-ScheduledTaskTrigger -Daily -At 2:05AM)
 Register-OrReplaceTask -Name "KYZ-MonthlyDemand-Refresh" -Exe $ingestorExe -Arguments "scripts\windows\refresh_monthly_demand.py" -Trigger (New-ScheduledTaskTrigger -Daily -At 2:10AM)
 

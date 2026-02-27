@@ -8,7 +8,7 @@ import { DataExplorerPage } from './DataExplorerPage'
 import { KpiTile } from './KpiTile'
 import { formatPct, toneFromDelta } from './kpiMeta'
 import { applyTheme, getInitialTheme, setStoredTheme, type ThemeMode } from './theme'
-import type { BillingMonth, Health, IntervalSeriesPoint, LiveSeriesPoint, Metrics, Quality, Summary } from './types'
+import type { BillingMonth, Health, IntervalSeriesPoint, LiveSeriesPoint, Metrics, Quality, Summary, UsageSummary } from './types'
 
 const money = (n: number) => `$${n.toLocaleString(undefined, { maximumFractionDigits: 0 })}`
 
@@ -70,6 +70,10 @@ export function DashboardPage() {
   const [currentMonthProfile, setCurrentMonthProfile] = useState<IntervalSeriesPoint[] | null>(null)
   const [currentWeekProfile, setCurrentWeekProfile] = useState<IntervalSeriesPoint[] | null>(null)
   const slowRefreshAtRef = useRef(0)
+
+  useEffect(() => {
+    client.trackPageView(location.pathname).catch(() => undefined)
+  }, [location.pathname])
 
   useEffect(() => {
     const loadFast = async () => {
@@ -152,6 +156,7 @@ export function DashboardPage() {
         <NavLink to={withSearch('/billing-risk')}>Billing & Risk</NavLink>
         <NavLink to={withSearch('/data-quality')}>Data Quality</NavLink>
         <NavLink to={withSearch('/data-explorer')}>Data Explorer</NavLink>
+        <NavLink to={withSearch('/usage')}>Usage</NavLink>
         <NavLink to={withSearch('/kiosk')}>Kiosk</NavLink>
       </nav>
 
@@ -161,6 +166,7 @@ export function DashboardPage() {
         <Route path="/billing-risk" element={<BillingRisk summary={summary} billing={billing} billingBasis={billingBasis} setBillingBasis={setBillingBasis} billingMode={billingMode} billingAnchorDate={billingAnchorDate} />} />
         <Route path="/data-quality" element={<DataQuality quality={quality} />} />
         <Route path="/data-explorer" element={<DataExplorerPage />} />
+        <Route path="/usage" element={<UsagePage />} />
       </Routes>
     </div>
   )
@@ -304,6 +310,55 @@ function DataQuality({ quality }: { quality: Quality | null }) {
     <Card t="Invalid Alarm (7d)" v={String(quality?.kyzInvalidAlarm.last7d ?? '—')} />
     <Card t="R17 Exclude (24h)" v={String(quality?.r17Exclude.last24h ?? '—')} />
     <Card t="R17 Exclude (7d)" v={String(quality?.r17Exclude.last7d ?? '—')} />
+  </section>
+}
+
+
+function UsagePage() {
+  const [usage24h, setUsage24h] = useState<UsageSummary | null>(null)
+  const [usage7d, setUsage7d] = useState<UsageSummary | null>(null)
+  const [usage30d, setUsage30d] = useState<UsageSummary | null>(null)
+
+  useEffect(() => {
+    const load = async () => {
+      const settled = await Promise.allSettled([client.usageSummary(1), client.usageSummary(7), client.usageSummary(30)])
+      if (settled[0].status === 'fulfilled') setUsage24h(settled[0].value)
+      if (settled[1].status === 'fulfilled') setUsage7d(settled[1].value)
+      if (settled[2].status === 'fulfilled') setUsage30d(settled[2].value)
+    }
+    load().catch(() => undefined)
+  }, [])
+
+  const chartOption = useMemo(() => {
+    if (!usage30d?.byDay?.length) return null
+    return buildChartOption({
+      xData: usage30d.byDay.map((d) => d.date),
+      yName: 'Views',
+      series: [{ type: 'bar', data: usage30d.byDay.map((d) => d.count) }],
+    })
+  }, [usage30d])
+
+  return <section className="grid charts">
+    <Card t="Views (24h)" v={String(usage24h?.totalViews ?? '—')} />
+    <Card t="Views (7d)" v={String(usage7d?.totalViews ?? '—')} />
+    <Card t="Views (30d)" v={String(usage30d?.totalViews ?? '—')} />
+    <Card t="Last Seen" v={usage30d?.lastSeen ? new Date(usage30d.lastSeen).toLocaleString() : '—'} />
+    <div className="card chart-card full">
+      <h3>Daily Views (Last 30 Days)</h3>
+      {chartOption ? <ReactECharts style={{ height: 280 }} option={chartOption} /> : <p className="muted">No data available.</p>}
+    </div>
+    <div className="card full">
+      <h3>Top Pages (Last 30 Days)</h3>
+      <div className="table-shell">
+        <table>
+          <thead><tr><th>Path</th><th>Views</th></tr></thead>
+          <tbody>
+            {(usage30d?.byPath ?? []).map((row) => <tr key={row.path}><td>{row.path}</td><td>{row.count}</td></tr>)}
+            {!usage30d?.byPath?.length && <tr><td colSpan={2} className="muted">No usage data yet.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </div>
   </section>
 }
 

@@ -19,6 +19,7 @@ from fastapi.staticfiles import StaticFiles
 
 from dashboard.api.analytics import BillingMonth, TariffConfig, annualized_peak_cost, compute_billing_series
 from dashboard.api.billing_periods import add_months_clamped, billing_period_end, parse_billing_anchor
+from dashboard.api.usage_store import UsageStore
 
 load_dotenv()
 
@@ -79,6 +80,11 @@ def configure_logging() -> logging.Logger:
 
 logger = configure_logging()
 cache = TTLCache()
+usage_store = UsageStore()
+
+
+def get_usage_retention_days() -> int:
+    return max(1, int(os.getenv("USAGE_RETENTION_DAYS", "180")))
 
 
 def get_tariff_config() -> TariffConfig:
@@ -208,6 +214,30 @@ async def auth_middleware(request: Request, call_next: Callable[..., Any]) -> JS
                 return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
     return await call_next(request)
 
+
+
+
+@app.post("/api/usage/pageview")
+def track_page_view(payload: dict[str, Any]) -> dict[str, bool]:
+    raw_path = str(payload.get("path", ""))
+    try:
+        usage_store.prune(get_usage_retention_days())
+        usage_store.increment_page_view(raw_path)
+    except Exception:
+        logger.exception("Failed to record usage pageview")
+        raise HTTPException(status_code=500, detail="Failed to record page view")
+    return {"ok": True}
+
+
+@app.get("/api/usage/summary")
+def get_usage_summary(days: int = 30) -> dict[str, Any]:
+    days = max(1, min(days, 365))
+    try:
+        usage_store.prune(get_usage_retention_days())
+        return usage_store.summary(days)
+    except Exception:
+        logger.exception("Failed to read usage summary")
+        raise HTTPException(status_code=500, detail="Failed to fetch usage summary")
 
 @app.get("/api/health")
 def get_health() -> dict[str, Any]:
