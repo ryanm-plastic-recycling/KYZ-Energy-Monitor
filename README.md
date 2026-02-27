@@ -107,12 +107,14 @@ dashboard\api\.venv\Scripts\python.exe -m pip install -r dashboard\api\requireme
 ```powershell
 Set-Location C:\apps\kyz-energy-monitor
 python main.py
-dashboard\api\.venv\Scripts\python.exe -m uvicorn dashboard.api.app:app --host 0.0.0.0 --port 8080
+dashboard\api\.venv\Scripts\python.exe -m dashboard.api.run_server
 ```
 
+Set `DASHBOARD_HOST`/`DASHBOARD_PORT` in `.env` to control where the dashboard listens. For remote access, allow/forward the chosen port in Windows Firewall and router/NAT, and set `DASHBOARD_AUTH_TOKEN`.
+
 Open:
-- `http://localhost:8080/`
-- `http://localhost:8080/kiosk?refresh=10&theme=dark`
+- `http://localhost:<DASHBOARD_PORT>/`
+- `http://localhost:<DASHBOARD_PORT>/kiosk?refresh=10&theme=dark`
 
 ## SQL credential model (ingestor vs dashboard)
 

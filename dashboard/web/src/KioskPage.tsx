@@ -39,6 +39,10 @@ export function KioskPage() {
   const [summary, setSummary] = useState<Summary | null>(null)
 
   useEffect(() => {
+    client.trackPageView('/kiosk').catch(() => undefined)
+  }, [])
+
+  useEffect(() => {
     if (kioskThemeParam === 'light' || kioskThemeParam === 'dark') {
       applyTheme(kioskThemeParam as ThemeMode)
       return

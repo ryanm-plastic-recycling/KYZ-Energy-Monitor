@@ -26,6 +26,8 @@ Self-hosted dashboard stack for KYZ interval data in `dbo.KYZ_Interval`, support
 - `GET /api/daily`
 - `GET /api/monthly-demand?months=12&basis=calendar|billing`
 - `GET /api/stream`
+- `POST /api/usage/pageview`
+- `GET /api/usage/summary?days=30`
 
 Optional API auth remains unchanged: `DASHBOARD_AUTH_TOKEN` can be provided in `X-Auth-Token` header or `?token=` query string.
 
@@ -42,8 +44,10 @@ Set-Location C:\apps\kyz-energy-monitor
 python -m venv dashboard\api\.venv
 dashboard\api\.venv\Scripts\python.exe -m pip install --upgrade pip
 dashboard\api\.venv\Scripts\python.exe -m pip install -r dashboard\api\requirements.txt
-dashboard\api\.venv\Scripts\python.exe -m uvicorn dashboard.api.app:app --host 0.0.0.0 --port 8080
+dashboard\api\.venv\Scripts\python.exe -m dashboard.api.run_server
 ```
+
+Set `DASHBOARD_HOST` and `DASHBOARD_PORT` in repo-root `.env` to control bind host/port.
 
 Routes:
 - `/` Executive default

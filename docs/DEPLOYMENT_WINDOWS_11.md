@@ -35,8 +35,10 @@ dashboard\api\.venv\Scripts\python.exe -m pip install -r dashboard\api\requireme
 ```powershell
 Set-Location C:\apps\kyz-energy-monitor
 .\.venv\Scripts\python.exe main.py
-dashboard\api\.venv\Scripts\python.exe -m uvicorn dashboard.api.app:app --host 0.0.0.0 --port 8080
+dashboard\api\.venv\Scripts\python.exe -m dashboard.api.run_server
 ```
+
+Set `DASHBOARD_PORT` in `.env` for your preferred listener port.
 
 ## Troubleshooting (PowerShell)
 

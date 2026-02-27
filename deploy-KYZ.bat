@@ -33,7 +33,7 @@ set "RC=0"
 
 REM Kill patterns used for hard-kill fallback (PowerShell -like wildcards)
 set "KILLPAT_INGESTOR=*%DST%\.venv\Scripts\python.exe*main.py*"
-set "KILLPAT_DASH=*%DST%\dashboard\api\.venv\Scripts\python.exe*-m uvicorn*dashboard.api.app:app*"
+set "KILLPAT_DASH=*%DST%\dashboard\api\.venv\Scripts\python.exe*-m dashboard.api.run_server*"
 set "KILLPAT_RETENTION=*%DST%\.venv\Scripts\python.exe*purge_live15s.py*"
 set "KILLPAT_MONTHLY=*%DST%\.venv\Scripts\python.exe*refresh_monthly_demand.py*"
 
@@ -171,7 +171,7 @@ if errorlevel 1 (
 
 echo.
 echo [INFO] Running smoke test...
-powershell -NoProfile -ExecutionPolicy Bypass -File "%DST%\scripts\windows\smoke_test.ps1" -BaseUrl "http://localhost:8080" -FreshnessThresholdSeconds 1800
+powershell -NoProfile -ExecutionPolicy Bypass -File "%DST%\scripts\windows\smoke_test.ps1" -FreshnessThresholdSeconds 1800
 if errorlevel 1 (
   echo [ERROR] smoke_test.ps1 failed.
   set "RC=1"
