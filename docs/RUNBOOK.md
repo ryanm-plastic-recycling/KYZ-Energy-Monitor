@@ -5,7 +5,7 @@ Operational checks for ingestor + dashboard API.
 ## Service status
 
 ```powershell
-Get-ScheduledTask -TaskName 'KYZ-Ingestor','KYZ-Dashboard-API' | Get-ScheduledTaskInfo
+Get-ScheduledTask -TaskName 'KYZ-Ingestor','KYZ-Dashboard-API','KYZ-PLC-CSV-Sync' | Get-ScheduledTaskInfo
 ```
 
 ## Health API
@@ -68,4 +68,22 @@ Start-ScheduledTask -TaskName 'KYZ-Dashboard-API'
 
 ```powershell
 .\scripts\windows\smoke_test.ps1 -BaseUrl http://localhost:8080 -AuthToken '<token>' -FreshnessThresholdSeconds 1800
+```
+
+
+## PLC CSV ingest checks
+
+Run importer manually:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\windows\plc_csv_sync.py
+```
+
+Logs:
+- `logs\plc_csv_sync.log`
+
+Latest ingest status:
+
+```sql
+SELECT * FROM dbo.vw_KYZ_PlcCsvIngestLatest;
 ```

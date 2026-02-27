@@ -68,11 +68,13 @@ Register-OrReplaceTask -Name "KYZ-Ingestor" -Exe $ingestorExe -Arguments "main.p
 Register-OrReplaceTask -Name "KYZ-Dashboard-API" -Exe $dashboardExe -Arguments "-m dashboard.api.run_server" -Trigger (New-ScheduledTaskTrigger -AtStartup)
 Register-OrReplaceTask -Name "KYZ-Live15s-Retention" -Exe $ingestorExe -Arguments "scripts\windows\purge_live15s.py --retention-days 60" -Trigger (New-ScheduledTaskTrigger -Daily -At 2:05AM)
 Register-OrReplaceTask -Name "KYZ-MonthlyDemand-Refresh" -Exe $ingestorExe -Arguments "scripts\windows\refresh_monthly_demand.py" -Trigger (New-ScheduledTaskTrigger -Daily -At 2:10AM)
+Register-OrReplaceTask -Name "KYZ-PLC-CSV-Sync" -Exe $ingestorExe -Arguments "scripts\windows\plc_csv_sync.py" -Trigger (New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Hours 1))
 
 if ($RunNow) {
     Start-ScheduledTask -TaskName "KYZ-Ingestor" | Out-Null
     Start-ScheduledTask -TaskName "KYZ-Dashboard-API" | Out-Null
     Start-ScheduledTask -TaskName "KYZ-Live15s-Retention" | Out-Null
     Start-ScheduledTask -TaskName "KYZ-MonthlyDemand-Refresh" | Out-Null
-    Write-Host "Started tasks: KYZ-Ingestor, KYZ-Dashboard-API, KYZ-Live15s-Retention, KYZ-MonthlyDemand-Refresh"
+    Start-ScheduledTask -TaskName "KYZ-PLC-CSV-Sync" | Out-Null
+    Write-Host "Started tasks: KYZ-Ingestor, KYZ-Dashboard-API, KYZ-Live15s-Retention, KYZ-MonthlyDemand-Refresh, KYZ-PLC-CSV-Sync"
 }
